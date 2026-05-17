@@ -16,7 +16,7 @@ app.use(express.json());
 // Routes
 app.use('/api/catalogue', require('./routes/catalogueRoutes'));
 app.use('/api/pricing', require('./routes/pricingRoutes'));
-
+app.use('/api/auth', require('./routes/authRoutes'));
 app.get('/', (req, res) => {
     res.send('Balouch Tailors API is running successfully...');
 });

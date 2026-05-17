@@ -3,12 +3,14 @@ const router = express.Router();
 const { getCatalogueItems, addCatalogueItem, deleteCatalogueItem } = require('../controllers/catalogueController');
 const { upload } = require('../config/cloudinary');
 
-// Raste (Routes)
+// Naya Code: protect middleware import kiya
+const { protect } = require('../middleware/authMiddleware'); 
+
+// GET public hai (Aam user site par designs dekh sakta hai)
 router.get('/', getCatalogueItems);
 
-// 'image' us field ka naam hai jo frontend se form data mein aayega
-router.post('/', upload.single('image'), addCatalogueItem); 
-
-router.delete('/:id', deleteCatalogueItem);
+// POST aur DELETE par protect laga diya (Sirf Admin kar sakta hai)
+router.post('/', protect, upload.single('image'), addCatalogueItem); 
+router.delete('/:id', protect, deleteCatalogueItem);
 
 module.exports = router;
