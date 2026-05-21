@@ -12,7 +12,7 @@ const cookieParser = require('cookie-parser');
 const app = express();
 
 // Middlewares
-app.use(cors());
+
 app.use(express.json());
 app.use(cookieParser());
 
@@ -40,3 +40,8 @@ connectDB()
         console.error('Failed to start server:', err);
         process.exit(1);
     });
+    const corsOptions = {
+    origin: ['http://localhost:5173'], // Aapka frontend ka exact link
+    credentials: true, // Cookies allow karne ke liye yeh lazmi hai
+};
+app.use(cors(corsOptions));
