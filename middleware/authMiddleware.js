@@ -5,12 +5,15 @@ const User = require('../models/User');
 const protect = catchAsync(async (req, res, next) => {
     let token;
 
-    // Check karna ke kya request ke headers mein 'Authorization' aur 'Bearer' mojood hai?
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-        try {
-            // "Bearer token_xyz" string ko tod kar sirf "token_xyz" nikalna
-            token = req.headers.authorization.split(' ')[1];
+    // Check karna ke kya request ke cookies mein 'jwt' mojood hai, ya phir headers mein 'Authorization' mojood hai?
+    if (req.cookies && req.cookies.jwt) {
+        token = req.cookies.jwt;
+    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
 
+    if (token) {
+        try {
             // Token ko apne secret key se verify (check) karna
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 

@@ -2,10 +2,18 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const catchAsync = require('../middleware/asyncHandler');
 
-// Token Generate karne ka function
-const generateToken = (id) => {
+// Token Generate aur Cookie set karne ka function
+const generateToken = (res, id) => {
     // Token 30 din tak valid rahega
-    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+    // Set JWT as HTTP-Only Cookie
+    res.cookie('jwt', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV !== 'development', // Use secure cookies in production
+        sameSite: 'strict', // Prevent CSRF attacks
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
 };
 
 // 1. REGISTER ADMIN (Ek dafa chalega)
@@ -26,12 +34,13 @@ const registerAdmin = catchAsync(async (req, res) => {
     });
 
     if (user) {
+        generateToken(res, user._id);
+
         res.status(201).json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            role: user.role,
-            token: generateToken(user._id)
+            role: user.role
         });
     } else {
         res.status(400);
@@ -48,12 +57,13 @@ const loginAdmin = catchAsync(async (req, res) => {
 
     // Agar user mil jaye aur password match kar jaye
     if (user && (await user.matchPassword(password))) {
+        generateToken(res, user._id);
+
         res.json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            role: user.role,
-            token: generateToken(user._id)
+            role: user.role
         });
     } else {
         res.status(401); // Unauthorized
@@ -61,4 +71,14 @@ const loginAdmin = catchAsync(async (req, res) => {
     }
 });
 
-module.exports = { registerAdmin, loginAdmin };
+// 3. LOGOUT ADMIN
+const logoutAdmin = catchAsync(async (req, res) => {
+    res.cookie('jwt', '', {
+        httpOnly: true,
+        expires: new Date(0)
+    });
+
+    res.status(200).json({ message: 'Logged out successfully' });
+});
+
+module.exports = { registerAdmin, loginAdmin, logoutAdmin };
