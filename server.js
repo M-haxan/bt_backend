@@ -10,7 +10,22 @@ dotenv.config();
 const cookieParser = require('cookie-parser');
 
 const app = express();
-
+const allowedOrigins = [
+    'http://localhost:5173', 
+    // 'https://aapki-live-website.vercel.app' // Jab frontend live ho toh yahan uska link daal dijiyega
+];
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Agar request allowed list mein hai, ya Postman (!origin) se aa rahi hai
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('CORS policy violation: Access Denied'));
+        }
+    },
+    credentials: true, // Cookies allow karne ke liye lazmi
+};
+app.use(cors(corsOptions)); // CORS ab sab se upar hai
 // Middlewares
 
 app.use(express.json());
@@ -40,8 +55,4 @@ connectDB()
         console.error('Failed to start server:', err);
         process.exit(1);
     });
-    const corsOptions = {
-    origin: ['http://localhost:5173'], // Aapka frontend ka exact link
-    credentials: true, // Cookies allow karne ke liye yeh lazmi hai
-};
-app.use(cors(corsOptions));
+  
