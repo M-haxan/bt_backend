@@ -67,7 +67,7 @@ const loginAdmin = catchAsync(async (req, res) => {
         });
     } else {
         res.status(401); // Unauthorized
-        throw new Error('Email ya password galat hai');
+        throw new Error('Incorrect Password or Email');
     }
 });
 

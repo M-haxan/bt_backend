@@ -45,4 +45,32 @@ const deleteCatalogueItem = catchAsync(async (req, res) => {
     res.status(200).json({ message: 'Item deleted successfully' });
 });
 
-module.exports = { addCatalogueItem, getCatalogueItems, deleteCatalogueItem };
+// 4. UPDATE - Item edit karna
+const updateCatalogueItem = catchAsync(async (req, res) => {
+    const { title, detail, category } = req.body;
+    const item = await Catalogue.findById(req.params.id);
+
+    if (!item) {
+        res.status(404); // Not Found
+        throw new Error('Item not found');
+    }
+
+    // Agar nayi image upload hui hai
+    if (req.file) {
+        // Purani image cloudinary se delete karo
+        if (item.imagePublicId) {
+            await cloudinary.uploader.destroy(item.imagePublicId);
+        }
+        item.imageUrl = req.file.path;
+        item.imagePublicId = req.file.filename;
+    }
+
+    item.title = title || item.title;
+    item.detail = detail || item.detail;
+    item.category = category || item.category;
+
+    const updatedItem = await item.save();
+    res.status(200).json(updatedItem);
+});
+
+module.exports = { addCatalogueItem, getCatalogueItems, deleteCatalogueItem, updateCatalogueItem };
