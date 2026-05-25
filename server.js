@@ -38,7 +38,10 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.get('/', (req, res) => {
     res.send('Balouch Tailors API is running successfully...');
 });
-
+// customer routes
+app.use('/api/customer', require('./routes/customerRoutes'));
+// template routes
+app.use('/api/template', require('./routes/templateRoutes'));
 // Error handler (after routes)
 app.use(errorHandler);
 
