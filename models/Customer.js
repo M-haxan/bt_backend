@@ -20,6 +20,7 @@ const customerSchema = new mongoose.Schema({
             type: String,
         },
         data: { type: Map, of: String }, // e.g., { "Length": "40", "Chest": "22" } 
+        preferences: [{type: String}], // e.g., ["ban, kaf pockets]
         lastUpdated: { type: Date, default: Date.now }
     }
     ]

@@ -35,6 +35,8 @@ app.use(cookieParser());
 app.use('/api/catalogue', require('./routes/catalogueRoutes'));
 app.use('/api/pricing', require('./routes/pricingRoutes'));
 app.use('/api/auth', require('./routes/authRoutes'));
+// Order routes
+app.use('/api/orders', require('./routes/orderRoutes'));
 app.get('/', (req, res) => {
     res.send('Balouch Tailors API is running successfully...');
 });
