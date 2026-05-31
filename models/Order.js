@@ -2,6 +2,7 @@
 const mongoose = require('mongoose');
 //creating schema
 const orderSchema = new mongoose.Schema({
+    orderNumber: { type: Number, unique: true }, 
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
     // creating suits array to store multiple suits in one order
     suits: [{

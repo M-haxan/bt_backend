@@ -10,8 +10,13 @@ const createOrder = catchAsync(async (req, res) => {
         res.status(400);
         throw new Error('Customer, at least one suit, and total amount are required');
     }
-    
+    const lastOrder = await Order.findOne().sort({ orderNumber: -1 });
+    let nextOrderNumber = 1; // Agar database khali hai toh 1 se shuru hoga
+    if (lastOrder && lastOrder.orderNumber) {
+        nextOrderNumber = lastOrder.orderNumber + 1; // Warna purane mein 1 add kar do
+    }
     const newOrder = new Order({
+         orderNumber: nextOrderNumber,
         customer,
         suits,
         totalAmount,
