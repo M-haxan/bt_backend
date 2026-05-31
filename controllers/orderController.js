@@ -31,14 +31,14 @@ const createOrder = catchAsync(async (req, res) => {
 
 // 2. READ - Sab Orders Dekhna
 const getAllOrders = catchAsync(async (req, res) => {
-    const orders = await Order.find().populate('customer').sort({ bookingDate: -1 });
+    const orders = await Order.find().populate('customer').populate('suits.wearer').sort({ bookingDate: -1 });
     res.status(200).json(orders); // <-- Changed
 });
 
 // 3. READ - Customer Specific Orders
 const getCustomerOrders = catchAsync(async (req, res) => {
     // req.params.customerId route se aayega
-    const orders = await Order.find({ customer: req.params.customerId }).populate('customer').sort({ bookingDate: -1 });
+    const orders = await Order.find({ customer: req.params.customerId }).populate('customer').populate('suits.wearer').sort({ bookingDate: -1 });
     res.status(200).json(orders); // <-- Changed
 });
 
