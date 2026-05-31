@@ -12,7 +12,12 @@ const orderSchema = new mongoose.Schema({
         customDesign: {type: String},
         designImage: {type: String},
         price: {type: Number, required: true},
+        wearer: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Customer' 
+    }
     }],
+
    totalAmount: { type: Number },
    advancePaid: { type: Number },
    balanceAmount: { type: Number },
