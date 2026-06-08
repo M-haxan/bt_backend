@@ -48,7 +48,7 @@ app.use('/api/template', require('./routes/templateRoutes'));
 app.use(errorHandler);
 
 // Start server after DB connection
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 7860;
 
 connectDB()
     .then(() => {
