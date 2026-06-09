@@ -1,23 +1,33 @@
 const Catalogue = require('../models/Catalogue');
-const { cloudinary } = require('../config/cloudinary');
-const catchAsync = require('../middleware/asyncHandler'); // Wrapper import kiya
+const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
+const catchAsync = require('../middleware/asyncHandler');
+
+const validCategories = ['Shalwar Qameez', 'Shirts', 'Kurta'];
+
+const normalizeCategory = (category) => {
+    if (validCategories.includes(category)) {
+        return category;
+    }
+    return 'Shirts';
+};
 
 // 1. CREATE - Naya design upload karna
 const addCatalogueItem = catchAsync(async (req, res) => {
     const { title, detail, category } = req.body;
-    
-    // Agar image nahi hai, toh seedha error throw karo (Global handler pakad lega)
+
     if (!req.file) {
-        res.status(400); // Bad Request
+        res.status(400);
         throw new Error('Image is required');
     }
+
+    const { imageUrl, imagePublicId } = getImageMetadata(req.file);
 
     const newItem = new Catalogue({
         title,
         detail,
-        category,
-        imageUrl: req.file.path,
-        imagePublicId: req.file.filename
+        category: normalizeCategory(category),
+        imageUrl,
+        imagePublicId
     });
 
     const savedItem = await newItem.save();
@@ -39,9 +49,12 @@ const deleteCatalogueItem = catchAsync(async (req, res) => {
         throw new Error('Item not found');
     }
 
-    await cloudinary.uploader.destroy(item.imagePublicId);
+    if (item.imagePublicId) {
+        await deleteUploadedImage(item.imagePublicId);
+    }
+
     await item.deleteOne();
-    
+
     res.status(200).json({ message: 'Item deleted successfully' });
 });
 
@@ -55,19 +68,19 @@ const updateCatalogueItem = catchAsync(async (req, res) => {
         throw new Error('Item not found');
     }
 
-    // Agar nayi image upload hui hai
     if (req.file) {
-        // Purani image cloudinary se delete karo
         if (item.imagePublicId) {
-            await cloudinary.uploader.destroy(item.imagePublicId);
+            await deleteUploadedImage(item.imagePublicId);
         }
-        item.imageUrl = req.file.path;
-        item.imagePublicId = req.file.filename;
+
+        const { imageUrl, imagePublicId } = getImageMetadata(req.file);
+        item.imageUrl = imageUrl;
+        item.imagePublicId = imagePublicId;
     }
 
     item.title = title || item.title;
     item.detail = detail || item.detail;
-    item.category = category || item.category;
+    item.category = normalizeCategory(category) || item.category;
 
     const updatedItem = await item.save();
     res.status(200).json(updatedItem);
