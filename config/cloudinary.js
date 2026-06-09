@@ -53,7 +53,7 @@ const upload = {
                         {
                             folder: 'balouch_tailors/catalogue',
                             resource_type: 'image',
-                            overwrite: false
+                            //overwrite: false
                         },
                         (uploadError, result) => {
                             if (uploadError) {
