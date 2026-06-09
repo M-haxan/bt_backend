@@ -17,6 +17,13 @@ const orderSchema = new mongoose.Schema({
         ref: 'Customer' 
     }
     }],
+    alterations:[{
+        description: { type: String },
+        price: { type: Number },
+        wearer: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Customer' }
+    }],
 
    totalAmount: { type: Number },
    advancePaid: { type: Number },

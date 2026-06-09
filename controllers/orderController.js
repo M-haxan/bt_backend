@@ -4,9 +4,9 @@ const catchAsync = require('../middleware/asyncHandler');
 
 // 1. CREATE - Naya Order Create Karna
 const createOrder = catchAsync(async (req, res) => {
-    const { customer, suits, totalAmount, advancePaid, balanceAmount, deliveryDate } = req.body;
-    
-    if (!customer || !suits || suits.length === 0 || totalAmount === undefined) {
+    const { customer, suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate } = req.body;
+    // Validation: Customer, at least one suit, and total amount zaroori hai
+    if (!customer || !suits || !alterations || suits.length === 0 || totalAmount === undefined) {
         res.status(400);
         throw new Error('Customer, at least one suit, and total amount are required');
     }
@@ -31,24 +31,25 @@ const createOrder = catchAsync(async (req, res) => {
 
 // 2. READ - Sab Orders Dekhna
 const getAllOrders = catchAsync(async (req, res) => {
-    const orders = await Order.find().populate('customer').populate('suits.wearer').sort({ bookingDate: -1 });
+    //attaching the alteration.wearer to the order details
+    const orders = await Order.find().populate('customer').populate('suits.wearer').populate('alterations.wearer').sort({ bookingDate: -1 });
     res.status(200).json(orders); // <-- Changed
 });
 
 // 3. READ - Customer Specific Orders
 const getCustomerOrders = catchAsync(async (req, res) => {
     // req.params.customerId route se aayega
-    const orders = await Order.find({ customer: req.params.customerId }).populate('customer').populate('suits.wearer').sort({ bookingDate: -1 });
+    const orders = await Order.find({ customer: req.params.customerId }).populate('customer').populate('suits.wearer').populate('alterations.wearer').sort({ bookingDate: -1 });
     res.status(200).json(orders); // <-- Changed
 });
 
 // 4. UPDATE - Order Status ya Details Change Karna
 const updateOrder = catchAsync(async (req, res) => {
-    const { suits, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus } = req.body;
-    
+    const { suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus } = req.body;
+
     const updatedOrder = await Order.findByIdAndUpdate(
         req.params.id,
-        { suits, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus },
+        { suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus },
         { new: true, runValidators: true }
     ).populate('customer'); 
     
