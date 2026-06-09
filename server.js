@@ -10,22 +10,42 @@ dotenv.config();
 const cookieParser = require('cookie-parser');
 
 const app = express();
-const allowedOrigins = [
-    'http://localhost:5173', 
-     'https://balouch-tailors.vercel.app/' // Jab frontend live ho toh yahan uska link daal dijiyega
+const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://balouch-tailors.vercel.app'
 ];
+const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envAllowedOrigins])];
+
+const normalizeOrigin = (origin) => origin?.replace(/\/$/, '');
+
+const isAllowedOrigin = (origin) => {
+    if (!origin) return true;
+
+    const normalizedOrigin = normalizeOrigin(origin);
+    return allowedOrigins.some((allowedOrigin) => normalizeOrigin(allowedOrigin) === normalizedOrigin) ||
+        /^(https?:\/\/.*\.(vercel\.app|vercel\.dev))$/i.test(normalizedOrigin);
+};
+
 const corsOptions = {
     origin: function (origin, callback) {
-        // Agar request allowed list mein hai, ya Postman (!origin) se aa rahi hai
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isAllowedOrigin(origin)) {
             callback(null, true);
         } else {
             callback(new Error('CORS policy violation: Access Denied'));
         }
     },
-    credentials: true, // Cookies allow karne ke liye lazmi
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 };
-app.use(cors(corsOptions)); // CORS ab sab se upar hai
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 // Middlewares
 
 app.use(express.json());
