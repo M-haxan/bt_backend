@@ -2,7 +2,7 @@ const express = require('express');
 // Import the order controller
 const { createOrder, getAllOrders, getCustomerOrders, updateOrder, deleteOrder } = require('../controllers/orderController');
 
-
+const { upload } = require('../config/cloudinary');
 // Import the protect middleware
 const { protect } = require('../middleware/authMiddleware');
 
@@ -11,14 +11,14 @@ const router = express.Router();
 
 // Define the routes
 router.route('/')
-    .post(protect, createOrder)
+    .post(protect, upload.array('fabricImages', 10), createOrder)
     .get(protect, getAllOrders);
 
 router.route('/customer/:customerId')
     .get(protect, getCustomerOrders);
 
 router.route('/:id')
-    .put(protect, updateOrder)
+    .put(protect, upload.array('fabricImages', 10), updateOrder)
     .delete(protect, deleteOrder);
 
 // Export the router
