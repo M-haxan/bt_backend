@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
 require('dotenv').config();
 
@@ -22,10 +21,10 @@ if (isCloudinaryConfigured()) {
         api_secret: process.env.CLOUDINARY_API_SECRET
     });
 } else {
-    console.warn('Cloudinary credentials not found. Falling back to local file storage for uploads.');
+    console.warn('Cloudinary credentials not found. Uploads will be stored locally as WebP.');
 }
 
-const createLocalStorage = () => ({
+const createStorage = () => ({
     _handleFile: (req, file, cb) => {
         const ext = path.extname(file.originalname).toLowerCase();
         const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9.-]+/g, '-').toLowerCase();
@@ -35,8 +34,8 @@ const createLocalStorage = () => ({
         sharp(file.stream)
             .webp({ quality: 85 })
             .toFile(outputPath)
-            .then(() => {
-                cb(null, {
+            .then(async () => {
+                const localFile = {
                     fieldname: file.fieldname,
                     originalname: file.originalname,
                     encoding: file.encoding,
@@ -44,7 +43,27 @@ const createLocalStorage = () => ({
                     filename,
                     path: outputPath,
                     size: fs.statSync(outputPath).size
-                });
+                };
+
+                if (isCloudinaryConfigured()) {
+                    try {
+                        const result = await cloudinary.uploader.upload(outputPath, {
+                            folder: 'balouch_tailors/catalogue',
+                            resource_type: 'image',
+                            overwrite: false
+                        });
+
+                        localFile.secure_url = result.secure_url;
+                        localFile.public_id = result.public_id;
+                        localFile.path = result.secure_url;
+                        cb(null, localFile);
+                        return;
+                    } catch (uploadError) {
+                        console.warn('Cloudinary upload failed, falling back to local storage:', uploadError.message);
+                    }
+                }
+
+                cb(null, localFile);
             })
             .catch((error) => cb(error));
     },
@@ -57,19 +76,8 @@ const createLocalStorage = () => ({
     }
 });
 
-const storage = isCloudinaryConfigured()
-    ? new CloudinaryStorage({
-        cloudinary,
-        params: {
-            folder: 'balouch_tailors/catalogue',
-            allowed_formats: ['webp'],
-            format: 'webp'
-        }
-    })
-    : createLocalStorage();
-
 const upload = multer({
-    storage,
+    storage: createStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
@@ -103,7 +111,11 @@ const deleteUploadedImage = async (imagePublicId) => {
     if (!imagePublicId) return;
 
     if (isCloudinaryConfigured()) {
-        await cloudinary.uploader.destroy(imagePublicId);
+        try {
+            await cloudinary.uploader.destroy(imagePublicId);
+        } catch (error) {
+            console.warn('Cloudinary delete failed:', error.message);
+        }
         return;
     }
 
