@@ -14,6 +14,7 @@ const generateToken = (res, id) => {
         sameSite: 'none', // Prevent CSRF attacks
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
+    return token;
 };
 
 // 1. REGISTER ADMIN (Ek dafa chalega)
@@ -34,13 +35,14 @@ const registerAdmin = catchAsync(async (req, res) => {
     });
 
     if (user) {
-        generateToken(res, user._id);
+       const token = generateToken(res, user._id);
 
         res.status(201).json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            role: user.role
+            role: user.role,
+            token: token
         });
     } else {
         res.status(400);
@@ -57,13 +59,14 @@ const loginAdmin = catchAsync(async (req, res) => {
 
     // Agar user mil jaye aur password match kar jaye
     if (user && (await user.matchPassword(password))) {
-        generateToken(res, user._id);
+        const token = generateToken(res, user._id);
 
         res.json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            role: user.role
+            role: user.role,
+            token: token
         });
     } else {
         res.status(401); // Unauthorized
