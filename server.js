@@ -11,26 +11,6 @@ dotenv.config();
 const cookieParser = require('cookie-parser');
 
 const app = express();
-// const defaultAllowedOrigins = [
-//     'http://localhost:5173',
-//     'http://localhost:3000',
-//     'https://balouch-tailors.vercel.app'
-// ];
-// const envAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
-//     .split(',')
-//     .map((origin) => origin.trim())
-//     .filter(Boolean);
-// const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envAllowedOrigins])];
-
-// const normalizeOrigin = (origin) => origin?.replace(/\/$/, '');
-
-// const isAllowedOrigin = (origin) => {
-//     if (!origin) return true;
-
-//     const normalizedOrigin = normalizeOrigin(origin);
-//     return allowedOrigins.some((allowedOrigin) => normalizeOrigin(allowedOrigin) === normalizedOrigin) ||
-//         /^(https?:\/\/.*\.(vercel\.app|vercel\.dev))$/i.test(normalizedOrigin);
-// };
 
 const corsOptions = {
     origin:'https://balouch-tailors.vercel.app',
@@ -38,6 +18,7 @@ const corsOptions = {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
    optionsSuccessStatus: 200 // For legacy browser support
 };
+console.log("CORS Origin Set To:", corsOptions.origin);
 
 app.use(cors(corsOptions));
 // Middlewares
