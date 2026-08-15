@@ -33,8 +33,9 @@ const app = express();
 // };
 
 const corsOptions = {
-    origin:['https://balouch-tailors.vercel.app/'],
+    origin:'https://balouch-tailors.vercel.app/',
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
    optionsSuccessStatus: 200 // For legacy browser support
 };
 
