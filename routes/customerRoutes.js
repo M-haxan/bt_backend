@@ -6,11 +6,14 @@ const router = express.Router();
 const { createCustomer, getCustomers, getCustomerById, updateCustomer, deleteCustomer, updateMeasurements } = require('../controllers/customerController');
 // importing protect middleware
 const { protect } = require('../middleware/authMiddleware');
+// importing upload middleware
+const { upload } = require('../config/cloudinary');
+
 // creating routes
-router.post('/', protect, createCustomer);
+router.post('/', protect, upload.single('profileImage'), createCustomer);
 router.get('/', protect, getCustomers);
 router.get('/:id', protect, getCustomerById);
-router.put('/:id', protect, updateCustomer);
+router.put('/:id', protect, upload.single('profileImage'), updateCustomer);
 router.delete('/:id', protect, deleteCustomer);
 router.put('/:id/measurements', protect, updateMeasurements);
 // exporting router
