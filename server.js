@@ -12,29 +12,16 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
-const allowedOrigins = [
-    'https://balouch-tailors.vercel.app',
-    'https://www.balouch-tailors.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:5174'
-];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : [];
 
 const corsOptions = {
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl, postman)
-        if (!origin) return callback(null, true);
-        
-        if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.vercel.app')) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     optionsSuccessStatus: 200 // For legacy browser support
 };
-console.log("CORS Origin Configured for multiple environments");
 
 app.use(cors(corsOptions));
 // Middlewares
