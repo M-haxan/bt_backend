@@ -14,7 +14,15 @@ const generateToken = (id) => {
 
 // 1. CREATING CUSTOMER (With Profile Photo & PIN)
 const createCustomer = asyncHandler(async (req, res) => {
-    const { name, phone, address, measurements, pin, cnic } = req.body;
+    let { name, phone, address, measurements, pin, cnic } = req.body;
+
+    if (typeof measurements === 'string') {
+        try {
+            measurements = JSON.parse(measurements);
+        } catch (e) {
+            console.error('Error parsing measurements:', e);
+        }
+    }
 
     // Check if customer already exists
     const customerExists = await Customer.findOne({ phone });
@@ -35,7 +43,7 @@ const createCustomer = asyncHandler(async (req, res) => {
         name, 
         phone, 
         address, 
-        measurements, 
+        measurements: measurements || [], 
         pin, 
         profileImage,
         cnic
@@ -83,7 +91,15 @@ const getCustomerById = asyncHandler(async (req, res) => {
 
 // 5. UPDATING CUSTOMER (With Profile Photo Update)
 const updateCustomer = asyncHandler(async (req, res) => {
-    const { name, phone, address, measurements, pin, cnic } = req.body;
+    let { name, phone, address, measurements, pin, cnic } = req.body;
+
+    if (typeof measurements === 'string') {
+        try {
+            measurements = JSON.parse(measurements);
+        } catch (e) {
+            console.error('Error parsing measurements:', e);
+        }
+    }
     
     // Yahan humne findByIdAndUpdate ki jagah findById use kiya hai
     // Taake agar PIN update ho, toh Model ka .pre('save') middleware chal sake
