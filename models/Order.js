@@ -11,11 +11,15 @@ const orderSchema = new mongoose.Schema({
         staticTags:[],
         customDesign: {type: String},
         designImage: {type: String},
+        fabricImage: {
+            url: { type: String },
+            publicId: { type: String }
+        },
         price: {type: Number, required: true},
         wearer: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Customer' 
-    }
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'Customer' 
+        }
     }],
     alterations:[{
         description: { type: String },
