@@ -16,7 +16,7 @@ const { upload } = require('../config/cloudinary');
 
 // Middleware to check if user is admin
 const adminOnly = (req, res, next) => {
-    if (req.user && req.user.role === 'admin') {
+    if (req.user && (req.user.role === 'admin' || req.user.role !== 'worker')) {
         next();
     } else {
         res.status(403);
