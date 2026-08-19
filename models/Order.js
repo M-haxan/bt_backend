@@ -19,6 +19,15 @@ const orderSchema = new mongoose.Schema({
         wearer: { 
             type: mongoose.Schema.Types.ObjectId, 
             ref: 'Customer' 
+        },
+        assignedWorker: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'Worker' 
+        },
+        stitchingStatus: { 
+            type: String, 
+            enum: ['Pending', 'Assigned', 'Stitched'], 
+            default: 'Pending' 
         }
     }],
     alterations:[{

@@ -43,6 +43,8 @@ app.get('/', (req, res) => {
 app.use('/api/customer', require('./routes/customerRoutes'));
 // template routes
 app.use('/api/template', require('./routes/templateRoutes'));
+// worker routes
+app.use('/api/workers', require('./routes/workerRoutes'));
 // Error handler (after routes)
 app.use(errorHandler);
 

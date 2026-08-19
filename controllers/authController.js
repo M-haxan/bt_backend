@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Worker = require('../models/Worker');
 const jwt = require('jsonwebtoken');
 const catchAsync = require('../middleware/asyncHandler');
 
@@ -84,4 +85,38 @@ const logoutAdmin = catchAsync(async (req, res) => {
     res.status(200).json({ message: 'Logged out successfully' });
 });
 
-module.exports = { registerAdmin, loginAdmin, logoutAdmin };
+// 4. LOGIN WORKER
+const loginWorker = catchAsync(async (req, res) => {
+    const { phone, password } = req.body;
+
+    if (!phone || !password) {
+        res.status(400);
+        throw new Error('Phone number and password are required');
+    }
+
+    // Phone se worker search karein
+    const worker = await Worker.findOne({ phone: Number(phone) });
+
+    if (worker && (await worker.matchPassword(password))) {
+        // Active check karein
+        if (!worker.isActive) {
+            res.status(403);
+            throw new Error('Worker account is inactive. Please contact admin.');
+        }
+
+        const token = generateToken(res, worker._id);
+
+        res.json({
+            _id: worker._id,
+            name: worker.name,
+            phone: worker.phone,
+            role: worker.role,
+            token: token
+        });
+    } else {
+        res.status(401);
+        throw new Error('Incorrect Password or Phone Number');
+    }
+});
+
+module.exports = { registerAdmin, loginAdmin, logoutAdmin, loginWorker };
