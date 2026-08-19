@@ -22,10 +22,10 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Password save hone se pehle usko Encrypt (Hash) karna
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
     // Agar password change nahi hua toh aage barh jao
     if (!this.isModified('password')) {
-        next();
+        return;
     }
     // Password ko secure banane ka process
     const salt = await bcrypt.genSalt(10);
