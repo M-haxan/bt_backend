@@ -14,7 +14,9 @@ const {
     calculateWorkerSalary,
     payWorkerSalary,
     getWorkerPayments,
-    getWorkerDetails
+    getWorkerDetails,
+    updateLedgerEntry,
+    deleteLedgerEntry
 } = require('../controllers/workerController');
 
 const { protect } = require('../middleware/authMiddleware');
@@ -42,6 +44,10 @@ router.get('/:id/calculate-salary', protect, adminOnly, calculateWorkerSalary);
 router.post('/:id/pay-salary', protect, adminOnly, payWorkerSalary);
 router.get('/:id/payments', protect, getWorkerPayments);
 router.get('/:id/details', protect, adminOnly, getWorkerDetails);
+
+// Ledger Entry CRUD routes (Admin only)
+router.put('/ledger/:ledgerId', protect, adminOnly, updateLedgerEntry);
+router.delete('/ledger/:ledgerId', protect, adminOnly, deleteLedgerEntry);
 
 // Admin Worker CRUD routes
 router.route('/')

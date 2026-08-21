@@ -176,9 +176,22 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
         });
     });
 
-    const totalStitched = stitchedSuits.length;
-    const totalEarnings = totalStitched * worker.perSuitWage;
-    const balanceDue = totalEarnings - worker.advanceAmount;
+    // Fetch all pending ledger entries for this worker
+    const pendingEntries = await WorkerLedger.find({ worker: workerId, status: 'Pending' });
+    let totalStitched = 0;
+    let totalEarnings = 0;
+    let advanceTaken = 0;
+
+    pendingEntries.forEach(entry => {
+        if (entry.type === 'suit') {
+            totalStitched++;
+            totalEarnings += entry.amount;
+        } else if (entry.type === 'advance') {
+            advanceTaken += entry.amount;
+        }
+    });
+
+    const balanceDue = totalEarnings - advanceTaken;
 
     res.status(200).json({
         worker: {
@@ -193,7 +206,7 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
         stats: {
             totalStitched,
             totalEarnings,
-            advanceTaken: worker.advanceAmount,
+            advanceTaken,
             balanceDue
         },
         assignedSuits,
@@ -570,6 +583,97 @@ const getWorkerDetails = catchAsync(async (req, res) => {
     });
 });
 
+// 15. UPDATE LEDGER ENTRY (ADMIN ONLY)
+const updateLedgerEntry = catchAsync(async (req, res) => {
+    const { ledgerId } = req.params;
+    const { amount, date, description } = req.body;
+
+    const entry = await WorkerLedger.findById(ledgerId);
+    if (!entry) {
+        res.status(404);
+        throw new Error('Ledger entry not found');
+    }
+
+    if (entry.status === 'Paid') {
+        res.status(400);
+        throw new Error('Cannot edit a paid ledger entry');
+    }
+
+    const worker = await Worker.findById(entry.worker);
+    if (!worker) {
+        res.status(404);
+        throw new Error('Worker associated with ledger entry not found');
+    }
+
+    const oldAmount = entry.amount;
+    const newAmount = Number(amount);
+
+    if (isNaN(newAmount)) {
+        res.status(400);
+        throw new Error('Invalid amount');
+    }
+
+    // Update ledger entry
+    entry.amount = newAmount;
+    entry.date = date ? new Date(date) : entry.date;
+    entry.description = description || entry.description;
+    await entry.save();
+
+    // If it's an advance, update worker's running advance total
+    if (entry.type === 'advance') {
+        worker.advanceAmount = Math.max(0, worker.advanceAmount - oldAmount + newAmount);
+        await worker.save();
+    }
+
+    res.status(200).json({
+        message: 'Ledger entry updated successfully',
+        entry,
+        workerAdvance: worker.advanceAmount
+    });
+});
+
+// 16. DELETE LEDGER ENTRY (ADMIN ONLY)
+const deleteLedgerEntry = catchAsync(async (req, res) => {
+    const { ledgerId } = req.params;
+
+    const entry = await WorkerLedger.findById(ledgerId);
+    if (!entry) {
+        res.status(404);
+        throw new Error('Ledger entry not found');
+    }
+
+    if (entry.status === 'Paid') {
+        res.status(400);
+        throw new Error('Cannot delete a paid ledger entry');
+    }
+
+    const worker = await Worker.findById(entry.worker);
+    if (worker && entry.type === 'advance') {
+        worker.advanceAmount = Math.max(0, worker.advanceAmount - entry.amount);
+        await worker.save();
+    }
+
+    // If it's a suit entry, reset its stitchingStatus in the Order back to 'Assigned'
+    if (entry.type === 'suit' && entry.orderId && entry.suitId) {
+        const order = await Order.findById(entry.orderId);
+        if (order) {
+            const suit = order.suits.id(entry.suitId);
+            if (suit) {
+                suit.stitchingStatus = 'Assigned';
+                await order.save();
+            }
+        }
+    }
+
+    await entry.deleteOne();
+
+    res.status(200).json({
+        message: 'Ledger entry deleted successfully',
+        ledgerId,
+        workerAdvance: worker ? worker.advanceAmount : 0
+    });
+});
+
 module.exports = {
     createWorker,
     getWorkers,
@@ -584,5 +688,7 @@ module.exports = {
     calculateWorkerSalary,
     payWorkerSalary,
     getWorkerPayments,
-    getWorkerDetails
+    getWorkerDetails,
+    updateLedgerEntry,
+    deleteLedgerEntry
 };
