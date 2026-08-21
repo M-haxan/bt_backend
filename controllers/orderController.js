@@ -114,10 +114,106 @@ const deleteOrder = catchAsync(async (req, res) => {
     res.status(200).json({ message: 'Order and associated fabric images deleted successfully' }); 
 });
 
+// 6. PUBLIC TRACK ORDER
+const trackOrderPublic = catchAsync(async (req, res) => {
+    const { orderNumber } = req.params;
+    let num = orderNumber;
+    if (orderNumber.startsWith('BT-')) {
+        num = orderNumber.replace('BT-', '');
+    }
+    const parsedNum = Number(num);
+    if (isNaN(parsedNum)) {
+        res.status(400);
+        throw new Error('Invalid order number format');
+    }
+
+    const order = await Order.findOne({ orderNumber: parsedNum })
+        .populate('customer', 'name phone')
+        .populate('suits.wearer', 'name phone')
+        .populate('alterations.wearer', 'name phone');
+
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    res.status(200).json({
+        orderNumber: order.orderNumber,
+        bookingDate: order.bookingDate,
+        deliveryDate: order.deliveryDate,
+        orderStatus: order.orderStatus,
+        customerName: order.customer?.name || 'Customer',
+        suits: order.suits.map(s => ({
+            _id: s._id,
+            fabricDetails: s.fabricDetails,
+            wearerName: s.wearer?.name || order.customer?.name || 'Wearer',
+            stitchingStatus: s.stitchingStatus,
+            volumeNo: s.volumeNo,
+            staticTags: s.staticTags
+        })),
+        alterations: order.alterations.map(a => ({
+            alterationDetails: a.alterationDetails,
+            wearerName: a.wearer?.name || order.customer?.name || 'Wearer',
+            status: a.status
+        }))
+    });
+});
+
+// 7. PUBLIC TRACK SUIT
+const trackSuitPublic = catchAsync(async (req, res) => {
+    const { suitId } = req.params;
+
+    const order = await Order.findOne({ 'suits._id': suitId })
+        .populate('customer')
+        .populate('suits.wearer');
+
+    if (!order) {
+        res.status(404);
+        throw new Error('Suit not found or order deleted');
+    }
+
+    const suit = order.suits.id(suitId);
+    if (!suit) {
+        res.status(404);
+        throw new Error('Suit details not found');
+    }
+
+    const wearer = suit.wearer || order.customer;
+    const hasMeasurements = wearer?.measurements && wearer.measurements.length > 0;
+    const measurementsData = hasMeasurements ? wearer.measurements[0].data : {};
+    const measurementsCategory = hasMeasurements ? wearer.measurements[0].category : '';
+    const measurementsPreferences = hasMeasurements ? wearer.measurements[0].preferences : [];
+
+    res.status(200).json({
+        suitId: suit._id,
+        orderNumber: order.orderNumber,
+        bookingDate: order.bookingDate,
+        deliveryDate: order.deliveryDate,
+        stitchingStatus: suit.stitchingStatus,
+        fabricDetails: suit.fabricDetails,
+        volumeNo: suit.volumeNo,
+        staticTags: suit.staticTags || [],
+        customDesign: suit.customDesign || '',
+        designImage: suit.designImage,
+        fabricImage: suit.fabricImage,
+        wearer: {
+            name: wearer.name,
+            phone: wearer.phone,
+            measurements: {
+                category: measurementsCategory,
+                data: measurementsData,
+                preferences: measurementsPreferences
+            }
+        }
+    });
+});
+
 module.exports = {
     createOrder,
     getAllOrders,
     getCustomerOrders,
     updateOrder,
-    deleteOrder
+    deleteOrder,
+    trackOrderPublic,
+    trackSuitPublic
 };

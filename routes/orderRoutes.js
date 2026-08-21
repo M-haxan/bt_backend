@@ -1,6 +1,14 @@
 const express = require('express');
 // Import the order controller
-const { createOrder, getAllOrders, getCustomerOrders, updateOrder, deleteOrder } = require('../controllers/orderController');
+const { 
+    createOrder, 
+    getAllOrders, 
+    getCustomerOrders, 
+    updateOrder, 
+    deleteOrder,
+    trackOrderPublic,
+    trackSuitPublic
+} = require('../controllers/orderController');
 
 const { upload } = require('../config/cloudinary');
 // Import the protect middleware
@@ -8,6 +16,10 @@ const { protect } = require('../middleware/authMiddleware');
 
 // Create a new router
 const router = express.Router();
+
+// Public Tracking routes (unprotected)
+router.get('/track/:orderNumber', trackOrderPublic);
+router.get('/track/suit/:suitId', trackSuitPublic);
 
 // Define the routes
 router.route('/')
