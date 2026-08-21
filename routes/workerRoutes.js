@@ -8,7 +8,13 @@ const {
     deleteWorker,
     getWorkerDashboard,
     markSuitAsStitched,
-    adminAssignWorker
+    adminAssignWorker,
+    getWorkerLedger,
+    addWorkerAdvance,
+    calculateWorkerSalary,
+    payWorkerSalary,
+    getWorkerPayments,
+    getWorkerDetails
 } = require('../controllers/workerController');
 
 const { protect } = require('../middleware/authMiddleware');
@@ -28,6 +34,14 @@ const adminOnly = (req, res, next) => {
 router.get('/dashboard', protect, getWorkerDashboard);
 router.put('/suits/:orderId/:suitId/stitch', protect, markSuitAsStitched);
 router.put('/suits/:orderId/:suitId/assign', protect, adminOnly, adminAssignWorker);
+
+// Ledger & Salary routes
+router.get('/:id/ledger', protect, getWorkerLedger);
+router.post('/:id/advance', protect, adminOnly, addWorkerAdvance);
+router.get('/:id/calculate-salary', protect, adminOnly, calculateWorkerSalary);
+router.post('/:id/pay-salary', protect, adminOnly, payWorkerSalary);
+router.get('/:id/payments', protect, getWorkerPayments);
+router.get('/:id/details', protect, adminOnly, getWorkerDetails);
 
 // Admin Worker CRUD routes
 router.route('/')
