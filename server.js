@@ -49,7 +49,7 @@ app.use('/api/workers', require('./routes/workerRoutes'));
 app.use(errorHandler);
 
 // Start server after DB connection
-const PORT = process.env.PORT || 7860;
+const PORT = process.env.PORT || 3000;
 
 connectDB()
     .then(() => {
