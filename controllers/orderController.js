@@ -149,7 +149,10 @@ const trackOrderPublic = catchAsync(async (req, res) => {
             wearerName: s.wearer?.name || order.customer?.name || 'Wearer',
             stitchingStatus: s.stitchingStatus,
             volumeNo: s.volumeNo,
-            staticTags: s.staticTags
+            staticTags: s.staticTags,
+            cutting: s.cutting,
+            stitching: s.stitching,
+            finishing: s.finishing
         })),
         alterations: order.alterations.map(a => ({
             alterationDetails: a.alterationDetails,
@@ -196,6 +199,9 @@ const trackSuitPublic = catchAsync(async (req, res) => {
         customDesign: suit.customDesign || '',
         designImage: suit.designImage,
         fabricImage: suit.fabricImage,
+        cutting: suit.cutting,
+        stitching: suit.stitching,
+        finishing: suit.finishing,
         wearer: {
             name: wearer.name,
             phone: wearer.phone,

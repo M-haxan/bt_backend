@@ -137,18 +137,30 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
         throw new Error('Worker profile not found');
     }
 
-    // Find all orders that have suits assigned to this worker
-    const orders = await Order.find({ 'suits.assignedWorker': workerId })
+    // Find all orders that have suits assigned to this worker (in main field or stage fields)
+    const orders = await Order.find({
+        $or: [
+            { 'suits.assignedWorker': workerId },
+            { 'suits.stitching.assignedWorker': workerId },
+            { 'suits.cutting.assignedWorker': workerId },
+            { 'suits.finishing.assignedWorker': workerId }
+        ]
+    })
         .populate('customer')
         .populate('suits.wearer')
         .sort({ bookingDate: -1 });
 
     const assignedSuits = [];
+    const underInspectionSuits = [];
+    const reworkSuits = [];
     const stitchedSuits = [];
 
     orders.forEach(order => {
         order.suits.forEach(suit => {
-            if (suit.assignedWorker && suit.assignedWorker.toString() === workerId.toString()) {
+            const isAssigned = (suit.assignedWorker && suit.assignedWorker.toString() === workerId.toString()) ||
+                               (suit.stitching?.assignedWorker && suit.stitching.assignedWorker.toString() === workerId.toString());
+            
+            if (isAssigned) {
                 const suitData = {
                     orderId: order._id,
                     orderNumber: order.orderNumber,
@@ -164,11 +176,19 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
                     fabricImage: suit.fabricImage,
                     wearerName: suit.wearer?.name || order.customer?.name || 'Unknown',
                     price: suit.price,
-                    stitchingStatus: suit.stitchingStatus
+                    stitchingStatus: suit.stitchingStatus,
+                    reworkNotes: suit.stitching?.reworkNotes || '',
+                    cutting: suit.cutting,
+                    stitching: suit.stitching,
+                    finishing: suit.finishing
                 };
 
                 if (suit.stitchingStatus === 'Stitched') {
                     stitchedSuits.push(suitData);
+                } else if (suit.stitchingStatus === 'Submitted for Inspection') {
+                    underInspectionSuits.push(suitData);
+                } else if (suit.stitchingStatus === 'Rework Required') {
+                    reworkSuits.push(suitData);
                 } else {
                     assignedSuits.push(suitData);
                 }
@@ -210,11 +230,192 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
             balanceDue
         },
         assignedSuits,
+        underInspectionSuits,
+        reworkSuits,
         stitchedSuits
     });
 });
 
-// 7. MARK SUIT AS STITCHED
+// 7. WORKER SUBMITS SUIT FOR INSPECTION (NO LEDGER CREDIT YET)
+const submitSuitForInspection = catchAsync(async (req, res) => {
+    const { orderId, suitId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    const suit = order.suits.id(suitId);
+    if (!suit) {
+        res.status(404);
+        throw new Error('Suit not found inside the order');
+    }
+
+    const workerId = req.user._id;
+    const isAdmin = req.user.role === 'admin' || req.user.role !== 'worker';
+
+    if (!isAdmin) {
+        const isAssigned = (suit.assignedWorker && suit.assignedWorker.toString() === workerId.toString()) ||
+                           (suit.stitching?.assignedWorker && suit.stitching.assignedWorker.toString() === workerId.toString());
+        if (!isAssigned) {
+            res.status(403);
+            throw new Error('You are not assigned to stitch this suit');
+        }
+    }
+
+    if (suit.stitchingStatus === 'Stitched') {
+        res.status(400);
+        throw new Error('Suit is already approved and stitched');
+    }
+
+    suit.stitchingStatus = 'Submitted for Inspection';
+    if (!suit.stitching) suit.stitching = {};
+    suit.stitching.status = 'Submitted for Inspection';
+    
+    // Cutting should also be marked completed if not already
+    if (suit.cutting && suit.cutting.status !== 'Completed') {
+        suit.cutting.status = 'Completed';
+    }
+
+    await order.save();
+
+    res.status(200).json({ 
+        message: 'Suit submitted for admin inspection successfully. Wage will be credited once approved by Admin.',
+        suitId,
+        stitchingStatus: suit.stitchingStatus
+    });
+});
+
+// 7.1 ADMIN APPROVE SUIT (QUALITY CHECK PASSED -> RELEASE WAGE & UPDATE STATUS)
+const adminApproveSuit = catchAsync(async (req, res) => {
+    const { orderId, suitId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    const suit = order.suits.id(suitId);
+    if (!suit) {
+        res.status(404);
+        throw new Error('Suit not found inside the order');
+    }
+
+    if (suit.stitchingStatus === 'Stitched') {
+        res.status(400);
+        throw new Error('Suit is already approved');
+    }
+
+    suit.stitchingStatus = 'Stitched';
+    if (!suit.stitching) suit.stitching = {};
+    suit.stitching.status = 'Approved';
+    suit.stitching.reworkNotes = '';
+    suit.stitching.approvedAt = new Date();
+
+    if (suit.cutting && suit.cutting.status !== 'Completed') {
+        suit.cutting.status = 'Completed';
+    }
+    if (suit.finishing && suit.finishing.status !== 'Completed') {
+        suit.finishing.status = 'Completed';
+    }
+
+    // Determine worker to credit
+    const workerId = suit.stitching?.assignedWorker || suit.assignedWorker;
+    const isSelf = suit.stitching?.isSelf || (!workerId);
+
+    // If assigned to an external worker and not already credited
+    if (!isSelf && workerId) {
+        const existingEntry = await WorkerLedger.findOne({
+            orderId: order._id,
+            suitId: suit._id.toString(),
+            type: 'suit'
+        });
+
+        if (!existingEntry) {
+            const worker = await Worker.findById(workerId);
+            const wageAmount = suit.stitching?.wage || (worker ? worker.perSuitWage : 0);
+
+            if (worker && wageAmount > 0) {
+                await WorkerLedger.create({
+                    worker: workerId,
+                    type: 'suit',
+                    amount: wageAmount,
+                    description: `QC Approved Suit: ${suit.fabricDetails} (Order #BT-${order.orderNumber})`,
+                    orderId: order._id,
+                    suitId: suit._id.toString(),
+                    status: 'Pending'
+                });
+            }
+        }
+    }
+
+    // Check if all suits in the order are stitched
+    const allStitched = order.suits.every(s => s.stitchingStatus === 'Stitched');
+    if (allStitched && order.orderStatus === 'Pending') {
+        order.orderStatus = 'In Progress';
+    }
+
+    await order.save();
+
+    const updatedOrder = await Order.findById(orderId)
+        .populate('customer')
+        .populate('suits.wearer')
+        .populate('alterations.wearer');
+
+    res.status(200).json({ 
+        message: 'Suit approved successfully! Wage credited to worker ledger.', 
+        order: updatedOrder,
+        suitId 
+    });
+});
+
+// 7.2 ADMIN REJECT / REQUEST REWORK ON SUIT
+const adminRejectSuit = catchAsync(async (req, res) => {
+    const { orderId, suitId } = req.params;
+    const { reworkNotes } = req.body;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    const suit = order.suits.id(suitId);
+    if (!suit) {
+        res.status(404);
+        throw new Error('Suit not found inside the order');
+    }
+
+    suit.stitchingStatus = 'Rework Required';
+    if (!suit.stitching) suit.stitching = {};
+    suit.stitching.status = 'Rework Required';
+    suit.stitching.reworkNotes = reworkNotes || 'Defect found during QC inspection. Please review and rectify.';
+
+    // If an existing ledger entry was mistakenly created, remove it
+    await WorkerLedger.deleteMany({
+        orderId: order._id,
+        suitId: suit._id.toString(),
+        type: 'suit',
+        status: 'Pending'
+    });
+
+    await order.save();
+
+    const updatedOrder = await Order.findById(orderId)
+        .populate('customer')
+        .populate('suits.wearer')
+        .populate('alterations.wearer');
+
+    res.status(200).json({
+        message: 'Suit sent back for rework/alteration. Worker notified.',
+        order: updatedOrder,
+        suitId
+    });
+});
+
+// 7.3 DIRECT MARK SUIT AS STITCHED (Backward Compatible for Admin)
 const markSuitAsStitched = catchAsync(async (req, res) => {
     const { orderId, suitId } = req.params;
 
@@ -234,47 +435,18 @@ const markSuitAsStitched = catchAsync(async (req, res) => {
     const isAdmin = req.user.role === 'admin' || req.user.role !== 'worker';
 
     if (isAdmin) {
-        if (!suit.assignedWorker) {
-            res.status(400);
-            throw new Error('Please assign a worker first before marking as stitched');
-        }
-        workerId = suit.assignedWorker;
+        // Admin direct mark uses approval flow
+        return adminApproveSuit(req, res);
     } else {
-        if (!suit.assignedWorker || suit.assignedWorker.toString() !== workerId.toString()) {
-            res.status(403);
-            throw new Error('You are not assigned to stitch this suit');
-        }
+        // Worker must submit for inspection
+        return submitSuitForInspection(req, res);
     }
-
-    if (suit.stitchingStatus === 'Stitched') {
-        res.status(400);
-        throw new Error('Suit is already marked as stitched');
-    }
-
-    suit.stitchingStatus = 'Stitched';
-    await order.save();
-
-    // Create Ledger Entry for Stitching Wage
-    const worker = await Worker.findById(workerId);
-    if (worker) {
-        await WorkerLedger.create({
-            worker: workerId,
-            type: 'suit',
-            amount: worker.perSuitWage,
-            description: `Stitched Suit: ${suit.fabricDetails} (Order #BT-${order.orderNumber})`,
-            orderId: order._id,
-            suitId: suit._id.toString(),
-            status: 'Pending'
-        });
-    }
-
-    res.status(200).json({ message: 'Suit marked as stitched successfully', suitId });
 });
 
-// 8. ADMIN ASSIGN WORKER TO SUIT
-const adminAssignWorker = catchAsync(async (req, res) => {
+// 8. ADMIN ASSIGN STAGE (CUTTING, STITCHING, FINISHING OR OWNER/SELF)
+const adminAssignStage = catchAsync(async (req, res) => {
     const { orderId, suitId } = req.params;
-    const { workerId } = req.body; // Pass empty string to unassign
+    const { stage, isSelf, workerId, wage, status } = req.body;
 
     const order = await Order.findById(orderId);
     if (!order) {
@@ -288,29 +460,179 @@ const adminAssignWorker = catchAsync(async (req, res) => {
         throw new Error('Suit not found');
     }
 
-    if (!workerId) {
-        // Unassign worker
-        suit.assignedWorker = undefined;
-        suit.stitchingStatus = 'Pending';
-    } else {
+    const targetStage = stage || 'stitching';
+
+    if (!suit[targetStage]) {
+        suit[targetStage] = {};
+    }
+
+    if (isSelf) {
+        suit[targetStage].isSelf = true;
+        suit[targetStage].assignedWorker = null;
+        if (targetStage === 'stitching') {
+            suit.assignedWorker = undefined;
+        }
+    } else if (workerId) {
         const worker = await Worker.findById(workerId);
         if (!worker) {
             res.status(404);
             throw new Error('Worker not found');
         }
-        suit.assignedWorker = workerId;
-        suit.stitchingStatus = 'Assigned';
+        suit[targetStage].isSelf = false;
+        suit[targetStage].assignedWorker = workerId;
+        suit[targetStage].wage = wage !== undefined ? Number(wage) : worker.perSuitWage;
+        if (targetStage === 'stitching') {
+            suit.assignedWorker = workerId;
+            if (suit.stitchingStatus === 'Pending') {
+                suit.stitchingStatus = 'Assigned';
+            }
+        }
+    } else {
+        // Unassigned
+        suit[targetStage].isSelf = false;
+        suit[targetStage].assignedWorker = null;
+        if (targetStage === 'stitching') {
+            suit.assignedWorker = undefined;
+            suit.stitchingStatus = 'Pending';
+        }
+    }
+
+    if (status) {
+        suit[targetStage].status = status;
+        if (targetStage === 'stitching') {
+            suit.stitchingStatus = status === 'Completed' ? 'Stitched' : status;
+        }
     }
 
     await order.save();
-    
-    // Return populated order to update frontend state
+
     const updatedOrder = await Order.findById(orderId)
         .populate('customer')
         .populate('suits.wearer')
         .populate('alterations.wearer');
 
     res.status(200).json(updatedOrder);
+});
+
+// 8.1 ADMIN ASSIGN WORKER TO SUIT (LEGACY COMPATIBILITY)
+const adminAssignWorker = catchAsync(async (req, res) => {
+    const { orderId, suitId } = req.params;
+    const { workerId, isSelf } = req.body;
+
+    req.body.stage = 'stitching';
+    req.body.isSelf = isSelf || (workerId === 'self');
+    req.body.workerId = (workerId === 'self' || !workerId) ? null : workerId;
+
+    return adminAssignStage(req, res);
+});
+
+// 8.2 SHOP FINANCIAL SUMMARY (OWNER PROFIT VS WORKER EXPENSES VS OWNER LABOR)
+const getFinancialSummary = catchAsync(async (req, res) => {
+    // 1. All Orders Financials
+    const orders = await Order.find({});
+    
+    let totalRevenue = 0;
+    let totalAdvanceReceived = 0;
+    let totalBalanceReceivable = 0;
+    let totalSuitsCount = 0;
+    
+    let ownerStitchedCount = 0;
+    let ownerCuttingCount = 0;
+    let workerStitchedCount = 0;
+    let pendingInspectionCount = 0;
+    let reworkCount = 0;
+
+    orders.forEach(order => {
+        totalRevenue += (order.totalAmount || 0);
+        totalAdvanceReceived += (order.advancePaid || 0);
+        totalBalanceReceivable += (order.balanceAmount || 0);
+
+        if (order.suits && order.suits.length > 0) {
+            order.suits.forEach(suit => {
+                totalSuitsCount++;
+
+                // Stitching analysis
+                if (suit.stitching?.isSelf || (!suit.assignedWorker && !suit.stitching?.assignedWorker)) {
+                    if (suit.stitchingStatus === 'Stitched') {
+                        ownerStitchedCount++;
+                    }
+                } else {
+                    if (suit.stitchingStatus === 'Stitched') {
+                        workerStitchedCount++;
+                    }
+                }
+
+                // Cutting analysis
+                if (suit.cutting?.isSelf) {
+                    if (suit.cutting?.status === 'Completed' || suit.stitchingStatus === 'Stitched') {
+                        ownerCuttingCount++;
+                    }
+                }
+
+                if (suit.stitchingStatus === 'Submitted for Inspection') {
+                    pendingInspectionCount++;
+                } else if (suit.stitchingStatus === 'Rework Required') {
+                    reworkCount++;
+                }
+            });
+        }
+    });
+
+    // 2. Worker Ledgers Financials (Expenses)
+    const suitLedgers = await WorkerLedger.find({ type: 'suit' });
+    const advanceLedgers = await WorkerLedger.find({ type: 'advance' });
+
+    let totalWorkerWagesIncurred = 0;
+    let totalWorkerWagesPaid = 0;
+    let totalWorkerWagesPending = 0;
+
+    suitLedgers.forEach(entry => {
+        totalWorkerWagesIncurred += entry.amount;
+        if (entry.status === 'Paid') {
+            totalWorkerWagesPaid += entry.amount;
+        } else {
+            totalWorkerWagesPending += entry.amount;
+        }
+    });
+
+    let totalAdvancesGiven = 0;
+    advanceLedgers.forEach(entry => {
+        totalAdvancesGiven += entry.amount;
+    });
+
+    // Standard baseline rate for owner labor estimation (e.g. standard stitch wage 600, cutting 200)
+    const estimatedOwnerStitchValue = ownerStitchedCount * 600;
+    const estimatedOwnerCutValue = ownerCuttingCount * 200;
+    const totalOwnerLaborEarnings = estimatedOwnerStitchValue + estimatedOwnerCutValue;
+
+    // Pure Shop Business Profit (Gross Revenue - External Worker Out of Pocket Wages)
+    const netShopBusinessProfit = totalRevenue - totalWorkerWagesIncurred;
+
+    res.status(200).json({
+        totalRevenue,
+        totalAdvanceReceived,
+        totalBalanceReceivable,
+        totalSuitsCount,
+        counts: {
+            ownerStitchedCount,
+            ownerCuttingCount,
+            workerStitchedCount,
+            pendingInspectionCount,
+            reworkCount
+        },
+        workerExpenses: {
+            totalWorkerWagesIncurred,
+            totalWorkerWagesPaid,
+            totalWorkerWagesPending,
+            totalAdvancesGiven
+        },
+        ownerLabor: {
+            estimatedOwnerStitchValue,
+            estimatedOwnerCutValue,
+            totalOwnerLaborEarnings
+        },
+        netShopBusinessProfit
+    });
 });
 
 // 9. GET WORKER LEDGER
@@ -681,6 +1003,11 @@ module.exports = {
     updateWorker,
     deleteWorker,
     getWorkerDashboard,
+    submitSuitForInspection,
+    adminApproveSuit,
+    adminRejectSuit,
+    adminAssignStage,
+    getFinancialSummary,
     markSuitAsStitched,
     adminAssignWorker,
     getWorkerLedger,

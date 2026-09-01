@@ -20,13 +20,41 @@ const orderSchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId, 
             ref: 'Customer' 
         },
+        // Stage 1: Cutting
+        cutting: {
+            isSelf: { type: Boolean, default: true },
+            assignedWorker: { type: mongoose.Schema.Types.ObjectId, ref: 'Worker', default: null },
+            status: { type: String, enum: ['Pending', 'In Progress', 'Completed'], default: 'Pending' },
+            wage: { type: Number, default: 0 }
+        },
+        // Stage 2: Stitching (with QC approval)
+        stitching: {
+            isSelf: { type: Boolean, default: false },
+            assignedWorker: { type: mongoose.Schema.Types.ObjectId, ref: 'Worker', default: null },
+            status: { 
+                type: String, 
+                enum: ['Pending', 'Assigned', 'Submitted for Inspection', 'Approved', 'Rework Required'], 
+                default: 'Pending' 
+            },
+            reworkNotes: { type: String, default: '' },
+            wage: { type: Number, default: 0 },
+            approvedAt: { type: Date, default: null }
+        },
+        // Stage 3: Finishing / Pressing
+        finishing: {
+            isSelf: { type: Boolean, default: true },
+            assignedWorker: { type: mongoose.Schema.Types.ObjectId, ref: 'Worker', default: null },
+            status: { type: String, enum: ['Pending', 'In Progress', 'Completed'], default: 'Pending' },
+            wage: { type: Number, default: 0 }
+        },
+        // Backward compatibility fields
         assignedWorker: { 
             type: mongoose.Schema.Types.ObjectId, 
             ref: 'Worker' 
         },
         stitchingStatus: { 
             type: String, 
-            enum: ['Pending', 'Assigned', 'Stitched'], 
+            enum: ['Pending', 'Assigned', 'Submitted for Inspection', 'Stitched', 'Rework Required'], 
             default: 'Pending' 
         }
     }],

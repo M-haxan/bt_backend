@@ -7,6 +7,11 @@ const {
     updateWorker,
     deleteWorker,
     getWorkerDashboard,
+    submitSuitForInspection,
+    adminApproveSuit,
+    adminRejectSuit,
+    adminAssignStage,
+    getFinancialSummary,
     markSuitAsStitched,
     adminAssignWorker,
     getWorkerLedger,
@@ -32,10 +37,15 @@ const adminOnly = (req, res, next) => {
     }
 };
 
-// Worker routes
+// Worker & QC routes
 router.get('/dashboard', protect, getWorkerDashboard);
+router.get('/analytics/financial-summary', protect, adminOnly, getFinancialSummary);
+router.put('/suits/:orderId/:suitId/submit', protect, submitSuitForInspection);
+router.put('/suits/:orderId/:suitId/approve', protect, adminOnly, adminApproveSuit);
+router.put('/suits/:orderId/:suitId/reject', protect, adminOnly, adminRejectSuit);
 router.put('/suits/:orderId/:suitId/stitch', protect, markSuitAsStitched);
 router.put('/suits/:orderId/:suitId/assign', protect, adminOnly, adminAssignWorker);
+router.put('/suits/:orderId/:suitId/assign-stage', protect, adminOnly, adminAssignStage);
 
 // Ledger & Salary routes
 router.get('/:id/ledger', protect, getWorkerLedger);
