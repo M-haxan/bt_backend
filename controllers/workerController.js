@@ -2,6 +2,8 @@ const Worker = require('../models/Worker');
 const Order = require('../models/Order');
 const WorkerLedger = require('../models/WorkerLedger');
 const WorkerPayment = require('../models/WorkerPayment');
+const Expense = require('../models/Expense');
+const Supplier = require('../models/Supplier');
 const catchAsync = require('../middleware/asyncHandler');
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
 
@@ -600,19 +602,43 @@ const getFinancialSummary = catchAsync(async (req, res) => {
         totalAdvancesGiven += entry.amount;
     });
 
+    // 3. Direct Shop Expenses & Material Expenses
+    const allExpenses = await Expense.find({});
+    let totalShopExpenses = 0;
+    allExpenses.forEach(exp => {
+        totalShopExpenses += (exp.amount || 0);
+    });
+
+    // 4. Supplier Material Outstanding Debt (Abhi deny hain Material walon ko)
+    const allSuppliers = await Supplier.find({});
+    let totalSupplierPayable = 0;
+    let totalSupplierPurchases = 0;
+    let totalSupplierPaid = 0;
+
+    allSuppliers.forEach(sup => {
+        totalSupplierPayable += (sup.balancePayable || 0);
+        totalSupplierPurchases += (sup.totalPurchases || 0);
+        totalSupplierPaid += (sup.totalPaid || 0);
+    });
+
+    // Total Kharcha = Worker Wages + Shop Expenses (Rent, Bills, Materials, etc.)
+    const totalKharcha = totalWorkerWagesIncurred + totalShopExpenses;
+
+    // Net Business Profit = Total Kaam (Sales) - Total Kharcha
+    const netShopBusinessProfit = totalRevenue - totalKharcha;
+
     // Standard baseline rate for owner labor estimation (e.g. standard stitch wage 600, cutting 200)
     const estimatedOwnerStitchValue = ownerStitchedCount * 600;
     const estimatedOwnerCutValue = ownerCuttingCount * 200;
     const totalOwnerLaborEarnings = estimatedOwnerStitchValue + estimatedOwnerCutValue;
 
-    // Pure Shop Business Profit (Gross Revenue - External Worker Out of Pocket Wages)
-    const netShopBusinessProfit = totalRevenue - totalWorkerWagesIncurred;
-
     res.status(200).json({
-        totalRevenue,
-        totalAdvanceReceived,
-        totalBalanceReceivable,
+        totalRevenue, // Total Kaam (Sales)
+        totalAdvanceReceived, // Total Receiving (Advance collected)
+        totalBalanceReceivable, // Abhi Lenay Hain (Customer Udhar)
         totalSuitsCount,
+        totalKharcha, // Total Kharcha (Worker wages + Shop Expenses)
+        totalShopExpenses, // Shop General + Material Expenses
         counts: {
             ownerStitchedCount,
             ownerCuttingCount,
@@ -623,15 +649,20 @@ const getFinancialSummary = catchAsync(async (req, res) => {
         workerExpenses: {
             totalWorkerWagesIncurred,
             totalWorkerWagesPaid,
-            totalWorkerWagesPending,
+            totalWorkerWagesPending, // Abhi Denay Hain (Workers)
             totalAdvancesGiven
+        },
+        supplierExpenses: {
+            totalSupplierPayable, // Abhi Denay Hain (Material Suppliers)
+            totalSupplierPurchases,
+            totalSupplierPaid
         },
         ownerLabor: {
             estimatedOwnerStitchValue,
             estimatedOwnerCutValue,
             totalOwnerLaborEarnings
         },
-        netShopBusinessProfit
+        netShopBusinessProfit // Net Profit = Total Kaam - Total Kharcha
     });
 });
 
