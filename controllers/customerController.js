@@ -164,7 +164,105 @@ const updateMeasurements = asyncHandler(async (req, res) => {
     res.status(200).json(customer);
 });
 
-// Exports mein 'loginCustomer' laazmi add karein
+// 9. GET CUSTOMER KHATA STATEMENT & LEDGER
+const CustomerLedger = require('../models/CustomerLedger');
+
+const getCustomerLedger = asyncHandler(async (req, res) => {
+    const customerId = req.params.id;
+    const customer = await Customer.findById(customerId).select('name phone address khataBalance');
+
+    if (!customer) {
+        res.status(404);
+        throw new Error('Customer not found');
+    }
+
+    const ledgerEntries = await CustomerLedger.find({ customer: customerId })
+        .sort({ date: -1, createdAt: -1 });
+
+    res.status(200).json({
+        customer,
+        khataBalance: customer.khataBalance || 0,
+        entries: ledgerEntries
+    });
+});
+
+// 10. MANUAL SETTLEMENT / RECORD PAYMENT / REFUND ON KHATA
+const settleCustomerKhata = asyncHandler(async (req, res) => {
+    const customerId = req.params.id;
+    const { type, amount, description } = req.body;
+
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount <= 0) {
+        res.status(400);
+        throw new Error('Valid amount is required');
+    }
+
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+        res.status(404);
+        throw new Error('Customer not found');
+    }
+
+    let currentBalance = Number(customer.khataBalance) || 0;
+    let newBalance = currentBalance;
+    let entryType = type || 'payment';
+
+    if (entryType === 'payment') {
+        // Customer paid money -> reduces customer debt / increases customer credit
+        newBalance = currentBalance - numAmount;
+    } else if (entryType === 'refund') {
+        // Shop returned money to customer -> reduces customer credit
+        newBalance = currentBalance + numAmount;
+    } else if (entryType === 'debit') {
+        // Additional manual debt/charge added
+        newBalance = currentBalance + numAmount;
+    } else if (entryType === 'credit') {
+        // Additional manual credit given
+        newBalance = currentBalance - numAmount;
+    }
+
+    const ledgerEntry = await CustomerLedger.create({
+        customer: customerId,
+        type: entryType,
+        amount: numAmount,
+        runningBalance: newBalance,
+        description: description || (entryType === 'payment' ? 'Cash payment received on counter' : 'Refund / Khata adjustment')
+    });
+
+    customer.khataBalance = newBalance;
+    await customer.save();
+
+    res.status(200).json({
+        message: 'Khata updated successfully',
+        khataBalance: newBalance,
+        entry: ledgerEntry
+    });
+});
+
+// 11. QUICK LOOKUP KHATA BALANCE BY PHONE OR ID
+const getCustomerKhataBalance = asyncHandler(async (req, res) => {
+    const { identifier } = req.params; // Can be ID or Phone
+    let customer;
+
+    if (identifier.match(/^[0-9a-fA-F]{24}$/)) {
+        customer = await Customer.findById(identifier).select('name phone khataBalance');
+    } else {
+        customer = await Customer.findOne({ phone: identifier }).select('name phone khataBalance');
+    }
+
+    if (!customer) {
+        res.status(404);
+        throw new Error('Customer not found');
+    }
+
+    res.status(200).json({
+        _id: customer._id,
+        name: customer.name,
+        phone: customer.phone,
+        khataBalance: customer.khataBalance || 0
+    });
+});
+
 module.exports = { 
     createCustomer, 
     loginCustomer, 
@@ -173,5 +271,8 @@ module.exports = {
     updateCustomer, 
     deleteCustomer, 
     searchCustomerByPhone, 
-    updateMeasurements 
+    updateMeasurements,
+    getCustomerLedger,
+    settleCustomerKhata,
+    getCustomerKhataBalance
 };

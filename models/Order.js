@@ -71,6 +71,26 @@ const orderSchema = new mongoose.Schema({
    balanceAmount: { type: Number },
    bookingDate: { type: Date, default: Date.now },
    deliveryDate: { type: Date },
-   orderStatus: { type: String, enum: ['Pending', 'In Progress', 'Completed', 'Cancelled'], default: 'Pending' }
-});
+   orderStatus: { 
+       type: String, 
+       enum: ['Pending', 'In Progress', 'Completed', 'Delivered', 'Cancelled'], 
+       default: 'Pending' 
+   },
+   // Payment received when delivering / handing over the suit
+   receivedAtDelivery: {
+       amount: { type: Number, default: 0 },
+       date: { type: Date, default: null },
+       paymentMethod: { type: String, default: 'Cash' }
+   },
+   // If previous customer Khata was adjusted on this order booking
+   previousKhataAdjusted: {
+       type: { 
+           type: String, 
+           enum: ['none', 'added_due', 'deducted_advance'], 
+           default: 'none' 
+       },
+       amount: { type: Number, default: 0 }
+   }
+}, { timestamps: true });
+
 module.exports = mongoose.model('Order', orderSchema);

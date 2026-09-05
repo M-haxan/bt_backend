@@ -7,7 +7,8 @@ const {
     updateOrder, 
     deleteOrder,
     trackOrderPublic,
-    trackSuitPublic
+    trackSuitPublic,
+    deliverOrder
 } = require('../controllers/orderController');
 
 const { upload } = require('../config/cloudinary');
@@ -20,6 +21,9 @@ const router = express.Router();
 // Public Tracking routes (unprotected)
 router.get('/track/:orderNumber', trackOrderPublic);
 router.get('/track/suit/:suitId', trackSuitPublic);
+
+// Delivery & Payment Settle route
+router.put('/:id/deliver', protect, deliverOrder);
 
 // Define the routes
 router.route('/')

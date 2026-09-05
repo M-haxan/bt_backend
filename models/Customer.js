@@ -34,11 +34,13 @@ const customerSchema = new mongoose.Schema({
         data: { type: Map, of: String }, // e.g., { "Length": "40", "Chest": "22" } 
         preferences: [{type: String}], // e.g., ["ban, kaf pockets]
         lastUpdated: { type: Date, default: Date.now }
+    }],
+    // Running Khata Balance (Positive = Customer owes shop, Negative = Shop owes customer)
+    khataBalance: {
+        type: Number,
+        default: 0
     }
-    ]
-
-
-})
+}, { timestamps: true });
 // PIN check karne ka function (Customer Login ke waqt kaam aayega)
 customerSchema.methods.matchPin = async function (enteredPin) {
     return Number(enteredPin) === this.pin;

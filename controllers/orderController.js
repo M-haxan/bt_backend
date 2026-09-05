@@ -1,4 +1,6 @@
 const Order = require('../models/Order');
+const Customer = require('../models/Customer');
+const CustomerLedger = require('../models/CustomerLedger');
 const catchAsync = require('../middleware/asyncHandler');
 
 // Cloudinary helpers import kiye
@@ -6,12 +8,28 @@ const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary'
 
 // 1. CREATE - Naya Order Create Karna
 const createOrder = catchAsync(async (req, res) => {
-    let { customer, suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate } = req.body;
+    let { 
+        customer, 
+        suits, 
+        alterations, 
+        totalAmount, 
+        advancePaid, 
+        balanceAmount, 
+        deliveryDate,
+        previousKhataAdjusted 
+    } = req.body;
 
     // IMPORTANT LOGIC: Jab frontend se FormData (images) aata hai, toh arrays JSON string ban jati hain.
     // Isliye humein inko pehle wapis normal array mein parse (convert) karna hoga.
     if (typeof suits === 'string') suits = JSON.parse(suits);
     if (typeof alterations === 'string') alterations = JSON.parse(alterations);
+    if (typeof previousKhataAdjusted === 'string') {
+        try {
+            previousKhataAdjusted = JSON.parse(previousKhataAdjusted);
+        } catch (e) {
+            console.error('Error parsing previousKhataAdjusted:', e);
+        }
+    }
 
     // Validation Update: "Ya suits hon, YA alterations hon" (Dono mein se ek lazmi hai)
     if (!customer || (!suits?.length && !alterations?.length) || totalAmount === undefined) {
@@ -44,12 +62,52 @@ const createOrder = catchAsync(async (req, res) => {
         suits: suits || [],
         alterations: alterations || [],
         totalAmount,
-        advancePaid,
-        balanceAmount,
-        deliveryDate
+        advancePaid: advancePaid || 0,
+        balanceAmount: balanceAmount || 0,
+        deliveryDate,
+        previousKhataAdjusted: previousKhataAdjusted || { type: 'none', amount: 0 }
     });
     
     const savedOrder = await newOrder.save();
+
+    // 🌟 If Previous Khata was adjusted on this order, record in Customer Ledger 🌟
+    if (previousKhataAdjusted && previousKhataAdjusted.amount > 0) {
+        const customerDoc = await Customer.findById(customer);
+        if (customerDoc) {
+            const adjAmount = Number(previousKhataAdjusted.amount);
+            let currentBal = Number(customerDoc.khataBalance) || 0;
+            let newBal = currentBal;
+
+            if (previousKhataAdjusted.type === 'deducted_advance') {
+                // Customer's stored advance (-ve) was consumed in this order
+                newBal = currentBal + adjAmount;
+                await CustomerLedger.create({
+                    customer,
+                    type: 'adjustment',
+                    amount: adjAmount,
+                    runningBalance: newBal,
+                    description: `Advance balance adjusted into new Order #BT-${nextOrderNumber}`,
+                    orderId: savedOrder._id,
+                    orderNumber: nextOrderNumber
+                });
+            } else if (previousKhataAdjusted.type === 'added_due') {
+                // Previous udhar (+ve) added into invoice
+                await CustomerLedger.create({
+                    customer,
+                    type: 'adjustment',
+                    amount: adjAmount,
+                    runningBalance: currentBal,
+                    description: `Previous due included in Order #BT-${nextOrderNumber} invoice`,
+                    orderId: savedOrder._id,
+                    orderNumber: nextOrderNumber
+                });
+            }
+
+            customerDoc.khataBalance = newBal;
+            await customerDoc.save();
+        }
+    }
+
     res.status(201).json(savedOrder);
 });
 
@@ -214,6 +272,86 @@ const trackSuitPublic = catchAsync(async (req, res) => {
     });
 });
 
+// 8. DELIVER ORDER & SETTLE PAYMENT / RECORD UDHAR OR OVERPAYMENT
+const deliverOrder = catchAsync(async (req, res) => {
+    const { id } = req.params;
+    const { receivedAmount = 0, paymentMethod = 'Cash' } = req.body;
+
+    const order = await Order.findById(id).populate('customer');
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    const numReceived = Number(receivedAmount) || 0;
+    const previousBalance = Number(order.balanceAmount) || 0;
+    const diff = previousBalance - numReceived; // Positive = Underpaid (Udhar), Negative = Overpaid (Credit)
+
+    // Update order status and delivery details
+    order.orderStatus = 'Delivered';
+    order.receivedAtDelivery = {
+        amount: numReceived,
+        date: new Date(),
+        paymentMethod: paymentMethod || 'Cash'
+    };
+    order.balanceAmount = Math.max(0, previousBalance - numReceived);
+
+    // If there is a customer attached, update their khata
+    const customer = await Customer.findById(order.customer?._id || order.customer);
+    let updatedKhataBalance = customer ? Number(customer.khataBalance) || 0 : 0;
+
+    if (customer) {
+        if (diff > 0) {
+            // Customer paid less than due -> Remaining amount is recorded as Udhar (debit)
+            updatedKhataBalance += diff;
+            await CustomerLedger.create({
+                customer: customer._id,
+                type: 'debit',
+                amount: diff,
+                runningBalance: updatedKhataBalance,
+                description: `Unpaid balance (Udhar) on delivery of Order #BT-${order.orderNumber}`,
+                orderId: order._id,
+                orderNumber: order.orderNumber
+            });
+        } else if (diff < 0) {
+            // Customer paid more than due -> Excess amount is recorded as Advance Credit
+            const excess = Math.abs(diff);
+            updatedKhataBalance -= excess;
+            await CustomerLedger.create({
+                customer: customer._id,
+                type: 'credit',
+                amount: excess,
+                runningBalance: updatedKhataBalance,
+                description: `Overpayment / Change retained on delivery of Order #BT-${order.orderNumber}`,
+                orderId: order._id,
+                orderNumber: order.orderNumber
+            });
+        } else if (numReceived > 0 && previousBalance > 0) {
+            // Exact payment received
+            await CustomerLedger.create({
+                customer: customer._id,
+                type: 'payment',
+                amount: numReceived,
+                runningBalance: updatedKhataBalance,
+                description: `Full payment settled on delivery of Order #BT-${order.orderNumber}`,
+                orderId: order._id,
+                orderNumber: order.orderNumber
+            });
+        }
+
+        customer.khataBalance = updatedKhataBalance;
+        await customer.save();
+    }
+
+    const savedOrder = await order.save();
+
+    res.status(200).json({
+        message: 'Order marked as Delivered and payment/Khata settled successfully',
+        order: savedOrder,
+        khataBalance: updatedKhataBalance
+    });
+});
+
 module.exports = {
     createOrder,
     getAllOrders,
@@ -221,5 +359,6 @@ module.exports = {
     updateOrder,
     deleteOrder,
     trackOrderPublic,
-    trackSuitPublic
+    trackSuitPublic,
+    deliverOrder
 };
