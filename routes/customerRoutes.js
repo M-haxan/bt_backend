@@ -7,9 +7,11 @@ const {
     createCustomer, 
     getCustomers, 
     getCustomerById, 
+    getCustomerProfile,
     updateCustomer, 
     deleteCustomer, 
     updateMeasurements,
+    deleteMeasurementCategory,
     getCustomerLedger,
     settleCustomerKhata,
     getCustomerKhataBalance
@@ -23,12 +25,14 @@ const { upload } = require('../config/cloudinary');
 router.post('/', protect, upload.single('profileImage'), createCustomer);
 router.get('/', protect, getCustomers);
 router.get('/khata/:identifier', protect, getCustomerKhataBalance);
+router.get('/:id/profile', protect, getCustomerProfile);
 router.get('/:id/ledger', protect, getCustomerLedger);
 router.post('/:id/settle', protect, settleCustomerKhata);
 router.get('/:id', protect, getCustomerById);
 router.put('/:id', protect, upload.single('profileImage'), updateCustomer);
 router.delete('/:id', protect, deleteCustomer);
 router.put('/:id/measurements', protect, updateMeasurements);
+router.delete('/:id/measurements/:category', protect, deleteMeasurementCategory);
 
 // exporting router
 module.exports = router;
