@@ -4,19 +4,21 @@ const pricingSchema = new mongoose.Schema({
     serviceName: {
         type: String,
         required: true,
-        trim: true // e.g., "Shalwar Qameez", "Kurta", "Designer Shirt"
+        trim: true // e.g. "Kurta Stitching", "Shalwar Kameez", "Waistcoat"
     },
     description: {
         type: String,
-        trim: true // e.g., "Simple design, Fancy collar, or Double stitching"
+        trim: true
     },
     minPrice: {
         type: Number,
-        required: true // e.g., 1200
+        required: true,
+        default: 0
     },
     maxPrice: {
         type: Number,
-        required: true // e.g., 1400
+        required: true,
+        default: 0
     },
     deliveryTime: {
         type: String,

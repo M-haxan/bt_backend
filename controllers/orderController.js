@@ -12,6 +12,10 @@ const createOrder = catchAsync(async (req, res) => {
         customer, 
         suits, 
         alterations, 
+        orderItems,
+        subtotal,
+        discountPercent,
+        discountAmount,
         totalAmount, 
         advancePaid, 
         balanceAmount, 
@@ -23,6 +27,13 @@ const createOrder = catchAsync(async (req, res) => {
     // Isliye humein inko pehle wapis normal array mein parse (convert) karna hoga.
     if (typeof suits === 'string') suits = JSON.parse(suits);
     if (typeof alterations === 'string') alterations = JSON.parse(alterations);
+    if (typeof orderItems === 'string') {
+        try {
+            orderItems = JSON.parse(orderItems);
+        } catch (e) {
+            orderItems = [];
+        }
+    }
     if (typeof previousKhataAdjusted === 'string') {
         try {
             previousKhataAdjusted = JSON.parse(previousKhataAdjusted);
@@ -61,6 +72,10 @@ const createOrder = catchAsync(async (req, res) => {
         customer,
         suits: suits || [],
         alterations: alterations || [],
+        orderItems: orderItems || [],
+        subtotal: Number(subtotal) || 0,
+        discountPercent: Number(discountPercent) || 0,
+        discountAmount: Number(discountAmount) || 0,
         totalAmount,
         advancePaid: advancePaid || 0,
         balanceAmount: balanceAmount || 0,
@@ -69,6 +84,7 @@ const createOrder = catchAsync(async (req, res) => {
     });
     
     const savedOrder = await newOrder.save();
+
 
     // 🌟 If Previous Khata was adjusted on this order, record in Customer Ledger 🌟
     if (previousKhataAdjusted && previousKhataAdjusted.amount > 0) {
