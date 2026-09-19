@@ -32,6 +32,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/catalogue', require('./routes/catalogueRoutes'));
+app.use('/api/offers', require('./routes/offerRoutes'));
 app.use('/api/pricing', require('./routes/pricingRoutes'));
 app.use('/api/tailoring-services', require('./routes/tailoringServiceRoutes'));
 app.use('/api/auth', require('./routes/authRoutes'));
