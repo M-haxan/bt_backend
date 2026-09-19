@@ -6,6 +6,7 @@ const orderSchema = new mongoose.Schema({
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
     // creating suits array to store multiple suits in one order
     suits: [{
+        suitNumber: { type: String }, // e.g. BT-1001-1, BT-1001-2
         serviceType: { type: String, default: 'Shalwar Qameez' }, // Garment category defined in Settings
         basePrice: { type: Number, default: 0 }, // Base stitching rate
         customizations: [{ // Add-ons selected by user with prices

@@ -158,25 +158,43 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
     const stitchedSuits = [];
 
     orders.forEach(order => {
-        order.suits.forEach(suit => {
+        order.suits.forEach((suit, index) => {
             const isAssigned = (suit.assignedWorker && suit.assignedWorker.toString() === workerId.toString()) ||
                                (suit.stitching?.assignedWorker && suit.stitching.assignedWorker.toString() === workerId.toString());
             
             if (isAssigned) {
+                const suitNum = suit.suitNumber || (order.orderNumber ? `BT-${order.orderNumber}-${index + 1}` : `BT-${index + 1}`);
+                const wearerObj = suit.wearer || order.customer;
+                const measurementsList = (suit.wearer && suit.wearer.measurements && suit.wearer.measurements.length > 0)
+                    ? suit.wearer.measurements
+                    : (order.customer?.measurements || []);
+                const prefsObj = (suit.wearer && suit.wearer.stitchingPreferences)
+                    ? suit.wearer.stitchingPreferences
+                    : (order.customer?.stitchingPreferences || {});
+
                 const suitData = {
                     orderId: order._id,
                     orderNumber: order.orderNumber,
+                    suitNumber: suitNum,
+                    suitIndex: index + 1,
+                    totalSuitsInOrder: order.suits.length,
                     bookingDate: order.bookingDate,
                     deliveryDate: order.deliveryDate,
                     customerName: order.customer?.name || 'Unknown',
                     customerPhone: order.customer?.phone || '',
                     suitId: suit._id,
+                    serviceType: suit.serviceType || 'Shalwar Qameez',
+                    customizations: suit.customizations || [],
                     fabricDetails: suit.fabricDetails,
                     volumeNo: suit.volumeNo,
                     staticTags: suit.staticTags || [],
                     customDesign: suit.customDesign || '',
+                    designImage: suit.designImage || '',
                     fabricImage: suit.fabricImage,
                     wearerName: suit.wearer?.name || order.customer?.name || 'Unknown',
+                    wearer: wearerObj,
+                    measurements: measurementsList,
+                    stitchingPreferences: prefsObj,
                     price: suit.price,
                     stitchingStatus: suit.stitchingStatus,
                     reworkNotes: suit.stitching?.reworkNotes || '',

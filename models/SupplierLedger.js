@@ -32,7 +32,7 @@ const supplierLedgerSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Cash', 'Bank Transfer', 'JazzCash/EasyPaisa', 'Cheque', 'Credit'],
+        enum: ['Cash', 'Bank Transfer', 'JazzCash/EasyPaisa', 'Cheque', 'Credit', 'Other'],
         default: 'Cash'
     },
     notes: {

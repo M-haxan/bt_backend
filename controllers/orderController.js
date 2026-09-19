@@ -67,10 +67,18 @@ const createOrder = catchAsync(async (req, res) => {
         nextOrderNumber = lastOrder.orderNumber + 1; 
     }
 
+    // 🌟 Per-suit unique identifier assignment (e.g. BT-1001-1, BT-1001-2) 🌟
+    const preparedSuits = (suits || []).map((suit, index) => {
+        return {
+            ...suit,
+            suitNumber: `BT-${nextOrderNumber}-${index + 1}`
+        };
+    });
+
     const newOrder = new Order({
         orderNumber: nextOrderNumber,
         customer,
-        suits: suits || [],
+        suits: preparedSuits,
         alterations: alterations || [],
         orderItems: orderItems || [],
         subtotal: Number(subtotal) || 0,

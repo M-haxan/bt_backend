@@ -165,9 +165,10 @@ const settleSupplierPayment = catchAsync(async (req, res) => {
     }
 
     // 1. Create Payment Ledger Entry
+    const paymentDate = date ? new Date(date) : new Date();
     const paymentEntry = await SupplierLedger.create({
         supplier: id,
-        date: date ? new Date(date) : new Date(),
+        date: paymentDate,
         itemDetails: `Payment settlement to ${supplier.shopName}`,
         type: 'payment',
         amount: payAmount,
@@ -176,10 +177,43 @@ const settleSupplierPayment = catchAsync(async (req, res) => {
         notes: notes || 'Supplier Khata balance settlement'
     });
 
-    // 2. Update Supplier balances
+    // 2. Mark previous unpaid purchases as Paid/Settled (FIFO)
+    let remainingToSettle = payAmount;
+    const unpaidPurchases = await SupplierLedger.find({
+        supplier: id,
+        type: 'purchase',
+        paymentStatus: { $in: ['Unpaid', 'Partial'] }
+    }).sort({ date: 1, createdAt: 1 });
+
+    for (const purchase of unpaidPurchases) {
+        if (remainingToSettle <= 0) break;
+        if (remainingToSettle >= purchase.amount) {
+            purchase.paymentStatus = 'Paid';
+            remainingToSettle -= purchase.amount;
+            await purchase.save();
+        } else {
+            purchase.paymentStatus = 'Partial';
+            remainingToSettle = 0;
+            await purchase.save();
+        }
+    }
+
+    // 3. Update Supplier overall balances
     supplier.totalPaid += payAmount;
     supplier.balancePayable = Math.max(0, supplier.balancePayable - payAmount);
     await supplier.save();
+
+    // 4. Record in Shop Expenses Journal
+    await Expense.create({
+        title: `Vendor Payment - ${supplier.shopName}`,
+        category: 'Material & Supplies',
+        amount: payAmount,
+        date: paymentDate,
+        paidTo: supplier.shopName,
+        paymentMethod: paymentMethod || 'Cash',
+        supplierId: supplier._id,
+        notes: notes ? `Khata settlement: ${notes}` : 'Supplier Khata balance settlement'
+    });
 
     res.status(200).json({
         success: true,
