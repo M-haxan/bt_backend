@@ -9,18 +9,19 @@ const getPricing = catchAsync(async (req, res) => {
 
 // 2. CREATE NEW PRICING CARD
 const addPricing = catchAsync(async (req, res) => {
-    const { serviceName, description, minPrice, maxPrice, deliveryTime } = req.body;
+    const { serviceName, description, price, minPrice, deliveryTime } = req.body;
 
-    if (!serviceName || minPrice === undefined || maxPrice === undefined) {
+    const finalPrice = price !== undefined ? price : minPrice;
+
+    if (!serviceName || finalPrice === undefined) {
         res.status(400);
-        throw new Error('Service Name, Min Price, and Max Price are required.');
+        throw new Error('Service Name and Price are required.');
     }
 
     const newPricing = await Pricing.create({
         serviceName: serviceName.trim(),
         description: description?.trim() || '',
-        minPrice: Number(minPrice),
-        maxPrice: Number(maxPrice),
+        price: Number(finalPrice),
         deliveryTime: deliveryTime?.trim() || 'Standard (3-5 Days)'
     });
 
@@ -30,15 +31,16 @@ const addPricing = catchAsync(async (req, res) => {
 // 3. UPDATE PRICING CARD
 const updatePricing = catchAsync(async (req, res) => {
     const { id } = req.params;
-    const { serviceName, description, minPrice, maxPrice, deliveryTime } = req.body;
+    const { serviceName, description, price, minPrice, deliveryTime } = req.body;
+
+    const finalPrice = price !== undefined ? price : minPrice;
 
     const updated = await Pricing.findByIdAndUpdate(
         id,
         {
             ...(serviceName && { serviceName: serviceName.trim() }),
             ...(description !== undefined && { description: description.trim() }),
-            ...(minPrice !== undefined && { minPrice: Number(minPrice) }),
-            ...(maxPrice !== undefined && { maxPrice: Number(maxPrice) }),
+            ...(finalPrice !== undefined && { price: Number(finalPrice) }),
             ...(deliveryTime !== undefined && { deliveryTime: deliveryTime.trim() })
         },
         { new: true, runValidators: true }

@@ -10,12 +10,7 @@ const pricingSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
-    minPrice: {
-        type: Number,
-        required: true,
-        default: 0
-    },
-    maxPrice: {
+    price: {
         type: Number,
         required: true,
         default: 0
