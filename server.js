@@ -12,45 +12,18 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
-const envOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim().replace(/\/$/, '')).filter(Boolean)
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
     : [];
 
-// Default allowed origins (Ensures custom domain works even if Heroku config var is pending)
-const defaultAllowedOrigins = [
-    'https://www.balouchtailors.app',
-    'https://balouchtailors.app',
-    'https://balouch-tailors.vercel.app',
-    'https://www.balouch-tailors.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000'
-];
-
-const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envOrigins]));
-
 const corsOptions = {
-    origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, Postman)
-        if (!origin) return callback(null, true);
-
-        const cleanOrigin = origin.trim().replace(/\/$/, '');
-        if (allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        } else {
-            console.warn(`[CORS Blocked] Origin not allowed: ${origin}`);
-            return callback(null, true); // Permissive fallback to prevent preflight blocks
-        }
-    },
+    origin: allowedOrigins,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-    exposedHeaders: ['Set-Cookie'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     optionsSuccessStatus: 200 // For legacy browser support
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Explicitly handle all preflight OPTIONS requests
 // Middlewares
 
 app.use(express.json());
@@ -92,4 +65,3 @@ connectDB()
         console.error('Failed to start server:', err);
         process.exit(1);
     });
-  
