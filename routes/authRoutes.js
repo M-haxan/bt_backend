@@ -1,6 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { registerAdmin, loginAdmin, logoutAdmin, loginWorker } = require('../controllers/authController');
+const { 
+    registerAdmin, 
+    loginAdmin, 
+    logoutAdmin, 
+    loginWorker,
+    getAdminProfile,
+    updateAdminProfile
+} = require('../controllers/authController');
+const { protect } = require('../middleware/authMiddleware');
 
 // Route: POST /api/auth/register
 // Kaam: Naya admin banana (Sirf ek dafa chalega)
@@ -17,5 +25,10 @@ router.post('/worker-login', loginWorker);
 // Route: POST /api/auth/logout
 // Kaam: Admin logout karna aur Token (cookie) clear karna
 router.post('/logout', logoutAdmin);
+
+// Profile routes (Protected)
+router.route('/profile')
+    .get(protect, getAdminProfile)
+    .put(protect, updateAdminProfile);
 
 module.exports = router;

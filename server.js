@@ -49,6 +49,8 @@ app.use('/api/template', require('./routes/templateRoutes'));
 app.use('/api/workers', require('./routes/workerRoutes'));
 // expense & supplier routes
 app.use('/api/expenses', require('./routes/expenseRoutes'));
+// shop settings routes
+app.use('/api/settings', require('./routes/shopSettingRoutes'));
 // Error handler (after routes)
 app.use(errorHandler);
 

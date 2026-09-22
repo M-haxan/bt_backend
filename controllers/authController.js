@@ -119,4 +119,73 @@ const loginWorker = catchAsync(async (req, res) => {
     }
 });
 
-module.exports = { registerAdmin, loginAdmin, logoutAdmin, loginWorker };
+// 5. GET ADMIN PROFILE (Protected)
+const getAdminProfile = catchAsync(async (req, res) => {
+    const user = await User.findById(req.user._id).select('-password');
+    if (!user) {
+        res.status(404);
+        throw new Error('User not found');
+    }
+    res.status(200).json(user);
+});
+
+// 6. UPDATE ADMIN PROFILE (Protected)
+const updateAdminProfile = catchAsync(async (req, res) => {
+    const { name, email, currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+        res.status(404);
+        throw new Error('User not found');
+    }
+
+    if (name) user.name = name.trim();
+
+    if (email && email.toLowerCase() !== user.email.toLowerCase()) {
+        const emailExists = await User.findOne({ email: email.toLowerCase() });
+        if (emailExists && emailExists._id.toString() !== user._id.toString()) {
+            res.status(400);
+            throw new Error('This email is already in use by another account');
+        }
+        user.email = email.toLowerCase().trim();
+    }
+
+    // Password change verification
+    if (newPassword) {
+        if (!currentPassword) {
+            res.status(400);
+            throw new Error('Current password is required to set a new password');
+        }
+
+        const isMatch = await user.matchPassword(currentPassword);
+        if (!isMatch) {
+            res.status(400);
+            throw new Error('Current password is incorrect');
+        }
+
+        if (newPassword.length < 6) {
+            res.status(400);
+            throw new Error('New password must be at least 6 characters');
+        }
+
+        user.password = newPassword;
+    }
+
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        role: updatedUser.role
+    });
+});
+
+module.exports = { 
+    registerAdmin, 
+    loginAdmin, 
+    logoutAdmin, 
+    loginWorker,
+    getAdminProfile,
+    updateAdminProfile 
+};
