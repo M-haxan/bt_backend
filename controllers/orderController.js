@@ -135,13 +135,93 @@ const createOrder = catchAsync(async (req, res) => {
     res.status(201).json(savedOrder);
 });
 
-// 2. READ - Sab Orders Dekhna
+// 2. READ - Sab Orders Dekhna (Supports DB Pagination, Search, and Status Filter)
 const getAllOrders = catchAsync(async (req, res) => {
-    const orders = await Order.find()
+    const { page, limit, search, status } = req.query;
+
+    let filter = {};
+
+    // 1. Status Filter
+    if (status && status !== 'All') {
+        if (status === 'PendingQC') {
+            filter['suits.stitchingStatus'] = 'Submitted for Inspection';
+        } else {
+            filter.orderStatus = status;
+        }
+    }
+
+    // 2. Search Filter (Customer Name/Phone, Order #, Suit #, Wearer, Fabric, Vol, Design)
+    if (search && search.trim()) {
+        const rawSearch = search.trim();
+        const searchClean = rawSearch.replace(/^#/, '').replace(/^bt[-\s]?/i, '').trim();
+        const regex = new RegExp(rawSearch, 'i');
+        const cleanRegex = new RegExp(searchClean, 'i');
+
+        const matchingCustomers = await Customer.find({
+            $or: [{ name: regex }, { phone: cleanRegex }]
+        }).select('_id');
+        const customerIds = matchingCustomers.map(c => c._id);
+
+        const searchOr = [
+            { customer: { $in: customerIds } },
+            { 'suits.suitNumber': cleanRegex },
+            { 'suits.fabricDetails': regex },
+            { 'suits.volumeNo': regex },
+            { 'suits.customDesign': regex },
+            { 'suits.staticTags': regex }
+        ];
+
+        if (!isNaN(searchClean) && searchClean !== '') {
+            searchOr.push({ orderNumber: Number(searchClean) });
+        }
+
+        if (filter.$and) {
+            filter.$and.push({ $or: searchOr });
+        } else {
+            filter.$or = searchOr;
+        }
+    }
+
+    // Count pending QC count across all orders for badge
+    const totalPendingQCOrders = await Order.countDocuments({
+        'suits.stitchingStatus': 'Submitted for Inspection'
+    });
+
+    // If page or limit is provided, perform database-level server-side pagination
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await Order.countDocuments(filter);
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const orders = await Order.find(filter)
+            .populate('customer')
+            .populate('suits.wearer')
+            .populate('alterations.wearer')
+            .sort({ bookingDate: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            data: orders,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            },
+            totalPendingQC: totalPendingQCOrders
+        });
+    }
+
+    // Otherwise, return full array
+    const orders = await Order.find(filter)
         .populate('customer')
         .populate('suits.wearer')
         .populate('alterations.wearer')
-        .sort({ bookingDate: -1 });
+        .sort({ bookingDate: -1, createdAt: -1 });
     res.status(200).json(orders);
 });
 

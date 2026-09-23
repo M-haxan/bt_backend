@@ -62,9 +62,52 @@ const createWorker = catchAsync(async (req, res) => {
     });
 });
 
-// 2. GET ALL WORKERS
+// 2. GET ALL WORKERS (Supports DB Pagination & Search)
 const getWorkers = catchAsync(async (req, res) => {
-    const workers = await Worker.find({}).sort({ createdAt: -1 });
+    const { page, limit, search } = req.query;
+
+    let query = {};
+    if (search && search.trim()) {
+        const cleanSearch = search.trim();
+        const regex = new RegExp(cleanSearch, 'i');
+        const numSearch = Number(cleanSearch);
+
+        query.$or = [
+            { name: regex },
+            { address: regex },
+            { specialization: regex }
+        ];
+
+        if (!isNaN(numSearch) && numSearch > 0) {
+            query.$or.push({ phone: numSearch });
+        }
+    }
+
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await Worker.countDocuments(query);
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const workers = await Worker.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            data: workers,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
+    }
+
+    const workers = await Worker.find(query).sort({ createdAt: -1 });
     res.status(200).json(workers);
 });
 
@@ -129,11 +172,12 @@ const deleteWorker = catchAsync(async (req, res) => {
     res.status(200).json({ message: 'Worker deleted successfully' });
 });
 
-// 6. GET WORKER DASHBOARD DATA
+// 6. GET WORKER DASHBOARD DATA (Supports On-demand Tab Querying & Server-Side Pagination)
 const getWorkerDashboard = catchAsync(async (req, res) => {
     const workerId = req.user._id;
+    const { tab, page, limit, search } = req.query;
+
     const worker = await Worker.findById(workerId);
-    
     if (!worker) {
         res.status(404);
         throw new Error('Worker profile not found');
@@ -150,12 +194,12 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
     })
         .populate('customer')
         .populate('suits.wearer')
-        .sort({ bookingDate: -1 });
+        .sort({ bookingDate: -1, createdAt: -1 });
 
-    const assignedSuits = [];
-    const underInspectionSuits = [];
-    const reworkSuits = [];
-    const stitchedSuits = [];
+    const allAssigned = [];
+    const allInspection = [];
+    const allRework = [];
+    const allStitched = [];
 
     orders.forEach(order => {
         order.suits.forEach((suit, index) => {
@@ -204,13 +248,13 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
                 };
 
                 if (suit.stitchingStatus === 'Stitched') {
-                    stitchedSuits.push(suitData);
+                    allStitched.push(suitData);
                 } else if (suit.stitchingStatus === 'Submitted for Inspection') {
-                    underInspectionSuits.push(suitData);
+                    allInspection.push(suitData);
                 } else if (suit.stitchingStatus === 'Rework Required') {
-                    reworkSuits.push(suitData);
+                    allRework.push(suitData);
                 } else {
-                    assignedSuits.push(suitData);
+                    allAssigned.push(suitData);
                 }
             }
         });
@@ -233,6 +277,34 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
 
     const balanceDue = totalEarnings - advanceTaken;
 
+    // Search filter
+    const applySearch = (list) => {
+        if (!search || !search.trim()) return list;
+        const q = search.trim().toLowerCase();
+        const cleanQ = q.replace(/^#/, '').replace(/^bt[-\s]?/i, '');
+        return list.filter(item => {
+            const suitIdStr = (item.suitNumber || '').toLowerCase();
+            const orderNumStr = (item.orderNumber || '').toString().toLowerCase();
+            const customerName = (item.customerName || '').toLowerCase();
+            const wearerName = (item.wearerName || '').toLowerCase();
+            const fabric = (item.fabricDetails || '').toLowerCase();
+            return suitIdStr.includes(q) || suitIdStr.includes(cleanQ) || orderNumStr === cleanQ || customerName.includes(q) || wearerName.includes(q) || fabric.includes(q);
+        });
+    };
+
+    let selectedList = allAssigned;
+    if (tab === 'inspection') selectedList = allInspection;
+    else if (tab === 'rework') selectedList = allRework;
+    else if (tab === 'completed') selectedList = allStitched;
+
+    const filteredTabList = applySearch(selectedList);
+    const currentPage = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+    const totalRecords = filteredTabList.length;
+    const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+    const skip = (currentPage - 1) * pageSize;
+    const paginatedSuits = filteredTabList.slice(skip, skip + pageSize);
+
     res.status(200).json({
         worker: {
             name: worker.name,
@@ -247,12 +319,24 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
             totalStitched,
             totalEarnings,
             advanceTaken,
-            balanceDue
+            balanceDue,
+            assignedCount: allAssigned.length,
+            inspectionCount: allInspection.length,
+            reworkCount: allRework.length,
+            completedCount: allStitched.length
         },
-        assignedSuits,
-        underInspectionSuits,
-        reworkSuits,
-        stitchedSuits
+        activeTab: tab || 'assigned',
+        suits: paginatedSuits,
+        pagination: {
+            totalRecords,
+            currentPage,
+            totalPages,
+            pageSize
+        },
+        assignedSuits: allAssigned,
+        underInspectionSuits: allInspection,
+        reworkSuits: allRework,
+        stitchedSuits: allStitched
     });
 });
 
@@ -684,9 +768,10 @@ const getFinancialSummary = catchAsync(async (req, res) => {
     });
 });
 
-// 9. GET WORKER LEDGER
+// 9. GET WORKER LEDGER (Supports DB Pagination)
 const getWorkerLedger = catchAsync(async (req, res) => {
     const workerId = req.params.id;
+    const { page, limit } = req.query;
 
     // Auth check: Admin or the worker themselves
     if (req.user.role !== 'admin' && req.user._id.toString() !== workerId.toString()) {
@@ -694,7 +779,31 @@ const getWorkerLedger = catchAsync(async (req, res) => {
         throw new Error('Not authorized to view this ledger');
     }
 
-    const ledger = await WorkerLedger.find({ worker: workerId }).sort({ date: -1 });
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await WorkerLedger.countDocuments({ worker: workerId });
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const ledger = await WorkerLedger.find({ worker: workerId })
+            .sort({ date: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            data: ledger,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
+    }
+
+    const ledger = await WorkerLedger.find({ worker: workerId }).sort({ date: -1, createdAt: -1 });
     res.status(200).json(ledger);
 });
 
@@ -889,13 +998,38 @@ const payWorkerSalary = catchAsync(async (req, res) => {
     });
 });
 
-// 13. GET WORKER SALARY PAYMENT HISTORY
+// 13. GET WORKER SALARY PAYMENT HISTORY (Supports DB Pagination)
 const getWorkerPayments = catchAsync(async (req, res) => {
     const workerId = req.params.id;
+    const { page, limit } = req.query;
 
     if (req.user.role !== 'admin' && req.user._id.toString() !== workerId.toString()) {
         res.status(403);
         throw new Error('Not authorized to view payment history');
+    }
+
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await WorkerPayment.countDocuments({ worker: workerId });
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const payments = await WorkerPayment.find({ worker: workerId })
+            .sort({ paymentDate: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            data: payments,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
     }
 
     const payments = await WorkerPayment.find({ worker: workerId }).sort({ paymentDate: -1 });

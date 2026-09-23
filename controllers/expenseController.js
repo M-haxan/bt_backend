@@ -29,20 +29,65 @@ const createSupplier = catchAsync(async (req, res) => {
     });
 });
 
-// 2. Get All Suppliers
+// 2. Get All Suppliers (Supports DB Pagination & Search)
 const getSuppliers = catchAsync(async (req, res) => {
-    const suppliers = await Supplier.find({}).sort({ createdAt: -1 });
+    const { page, limit, search } = req.query;
 
-    // Aggregate summary
+    let query = {};
+    if (search && search.trim()) {
+        const regex = new RegExp(search.trim(), 'i');
+        query.$or = [
+            { name: regex },
+            { shopName: regex },
+            { phone: regex },
+            { category: regex }
+        ];
+    }
+
+    // Aggregate summary across all suppliers
+    const allSuppliers = await Supplier.find({});
     let totalPurchasesAll = 0;
     let totalPaidAll = 0;
     let totalBalancePayableAll = 0;
 
-    suppliers.forEach(s => {
+    allSuppliers.forEach(s => {
         totalPurchasesAll += (s.totalPurchases || 0);
         totalPaidAll += (s.totalPaid || 0);
         totalBalancePayableAll += (s.balancePayable || 0);
     });
+
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await Supplier.countDocuments(query);
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const suppliers = await Supplier.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            success: true,
+            summary: {
+                totalPurchasesAll,
+                totalPaidAll,
+                totalBalancePayableAll,
+                supplierCount: allSuppliers.length
+            },
+            data: suppliers,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
+    }
+
+    const suppliers = await Supplier.find(query).sort({ createdAt: -1 });
 
     res.status(200).json({
         success: true,
@@ -50,21 +95,48 @@ const getSuppliers = catchAsync(async (req, res) => {
             totalPurchasesAll,
             totalPaidAll,
             totalBalancePayableAll,
-            supplierCount: suppliers.length
+            supplierCount: allSuppliers.length
         },
         data: suppliers
     });
 });
 
-// 3. Get Single Supplier & Ledger Statement
+// 3. Get Single Supplier & Ledger Statement (Supports DB Pagination)
 const getSupplierLedger = catchAsync(async (req, res) => {
     const { id } = req.params;
+    const { page, limit } = req.query;
 
     const supplier = await Supplier.findById(id);
     if (!supplier) {
         return res.status(404).json({
             success: false,
             message: 'Supplier not found'
+        });
+    }
+
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await SupplierLedger.countDocuments({ supplier: id });
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const ledger = await SupplierLedger.find({ supplier: id })
+            .sort({ date: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            success: true,
+            supplier,
+            ledger,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
         });
     }
 
@@ -275,13 +347,22 @@ const createDirectExpense = catchAsync(async (req, res) => {
     });
 });
 
-// 8. Get All Shop Expenses
+// 8. Get All Shop Expenses (Supports DB Pagination & Search)
 const getExpenses = catchAsync(async (req, res) => {
-    const { category, startDate, endDate } = req.query;
+    const { category, startDate, endDate, page, limit, search } = req.query;
 
     let query = {};
     if (category && category !== 'All') {
         query.category = category;
+    }
+
+    if (search && search.trim()) {
+        const regex = new RegExp(search.trim(), 'i');
+        query.$or = [
+            { title: regex },
+            { paidTo: regex },
+            { notes: regex }
+        ];
     }
 
     if (startDate || endDate) {
@@ -290,15 +371,45 @@ const getExpenses = catchAsync(async (req, res) => {
         if (endDate) query.date.$lte = new Date(endDate);
     }
 
-    const expenses = await Expense.find(query).sort({ date: -1, createdAt: -1 });
-
+    // Category totals calculation across matching filters
+    const allMatchingExpenses = await Expense.find(query);
     let totalExpenseAmount = 0;
     const categoryTotals = {};
 
-    expenses.forEach(e => {
+    allMatchingExpenses.forEach(e => {
         totalExpenseAmount += (e.amount || 0);
         categoryTotals[e.category] = (categoryTotals[e.category] || 0) + (e.amount || 0);
     });
+
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await Expense.countDocuments(query);
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const expenses = await Expense.find(query)
+            .sort({ date: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            success: true,
+            totalExpenseAmount,
+            categoryTotals,
+            count: totalRecords,
+            data: expenses,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
+    }
+
+    const expenses = await Expense.find(query).sort({ date: -1, createdAt: -1 });
 
     res.status(200).json({
         success: true,

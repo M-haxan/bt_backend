@@ -116,19 +116,56 @@ const loginCustomer = asyncHandler(async (req, res) => {
     }
 });
 
-// 3. GETTING ALL CUSTOMERS
+// 3. GETTING ALL CUSTOMERS (Supports DB Pagination & Search)
 const getCustomers = asyncHandler(async (req, res) => {
-    const customers = await Customer.find().sort({ createdAt: -1 });
-    
-    // Backfill any legacy customers without customerNumber
-    for (let i = 0; i < customers.length; i++) {
-        if (!customers[i].customerNumber) {
-            const num = 1001 + (customers.length - 1 - i);
-            customers[i].customerNumber = num;
-            await Customer.findByIdAndUpdate(customers[i]._id, { customerNumber: num });
+    const { page, limit, search } = req.query;
+
+    let query = {};
+    if (search && search.trim()) {
+        const cleanSearch = search.trim();
+        const searchRegex = new RegExp(cleanSearch, 'i');
+        const numSearch = Number(cleanSearch);
+
+        query.$or = [
+            { name: searchRegex },
+            { phone: searchRegex },
+            { city: searchRegex },
+            { address: searchRegex },
+            { cnic: searchRegex }
+        ];
+
+        if (!isNaN(numSearch) && numSearch > 0) {
+            query.$or.push({ customerNumber: numSearch });
         }
     }
 
+    // If page or limit is provided, perform database-level server-side pagination
+    if (page || limit) {
+        const currentPage = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.max(1, parseInt(limit, 10) || 10);
+        const skip = (currentPage - 1) * pageSize;
+
+        const totalRecords = await Customer.countDocuments(query);
+        const totalPages = Math.ceil(totalRecords / pageSize) || 1;
+
+        const customers = await Customer.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize);
+
+        return res.status(200).json({
+            data: customers,
+            pagination: {
+                totalRecords,
+                currentPage,
+                totalPages,
+                pageSize
+            }
+        });
+    }
+
+    // Otherwise, return full array for non-paginated legacy callers (e.g. dropdowns in Order creation)
+    const customers = await Customer.find(query).sort({ createdAt: -1 });
     res.status(200).json(customers);
 });
 
