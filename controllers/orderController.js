@@ -8,11 +8,11 @@ const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary'
 
 // 1. CREATE - Naya Order Create Karna
 const createOrder = catchAsync(async (req, res) => {
-    let { 
+    const {
         customer, 
-        suits, 
-        alterations, 
-        orderItems,
+        suits: rawSuits, 
+        alterations: rawAlterations, 
+        orderItems: rawOrderItems,
         subtotal,
         discountPercent,
         discountAmount,
@@ -20,8 +20,24 @@ const createOrder = catchAsync(async (req, res) => {
         advancePaid, 
         balanceAmount, 
         deliveryDate,
-        previousKhataAdjusted 
+        previousKhataAdjusted,
+        createdBy
     } = req.body;
+
+    let suits = rawSuits;
+    let alterations = rawAlterations;
+    let orderItems = rawOrderItems;
+
+    let parsedCreatedBy = { userType: 'admin', name: 'Admin' };
+    if (typeof createdBy === 'string') {
+        try {
+            parsedCreatedBy = JSON.parse(createdBy);
+        } catch (e) {
+            parsedCreatedBy = { userType: 'admin', name: createdBy };
+        }
+    } else if (createdBy && typeof createdBy === 'object') {
+        parsedCreatedBy = createdBy;
+    }
 
     // IMPORTANT LOGIC: Jab frontend se FormData (images) aata hai, toh arrays JSON string ban jati hain.
     // Isliye humein inko pehle wapis normal array mein parse (convert) karna hoga.
@@ -88,7 +104,8 @@ const createOrder = catchAsync(async (req, res) => {
         advancePaid: advancePaid || 0,
         balanceAmount: balanceAmount || 0,
         deliveryDate,
-        previousKhataAdjusted: previousKhataAdjusted || { type: 'none', amount: 0 }
+        previousKhataAdjusted: previousKhataAdjusted || { type: 'none', amount: 0 },
+        createdBy: parsedCreatedBy
     });
     
     const savedOrder = await newOrder.save();
@@ -145,6 +162,8 @@ const getAllOrders = catchAsync(async (req, res) => {
     if (status && status !== 'All') {
         if (status === 'PendingQC') {
             filter['suits.stitchingStatus'] = 'Submitted for Inspection';
+        } else if (status === 'Active') {
+            filter.orderStatus = { $nin: ['Delivered', 'Cancelled'] };
         } else {
             filter.orderStatus = status;
         }
@@ -157,8 +176,17 @@ const getAllOrders = catchAsync(async (req, res) => {
         const regex = new RegExp(rawSearch, 'i');
         const cleanRegex = new RegExp(searchClean, 'i');
 
+        const customerOr = [{ name: regex }, { phone: cleanRegex }];
+        const digits = rawSearch.replace(/\D/g, '');
+        if (digits) {
+            const num = Number(digits.replace(/^0+/, ''));
+            if (!isNaN(num) && num > 0) {
+                customerOr.push({ phone: num });
+            }
+        }
+
         const matchingCustomers = await Customer.find({
-            $or: [{ name: regex }, { phone: cleanRegex }]
+            $or: customerOr
         }).select('_id');
         const customerIds = matchingCustomers.map(c => c._id);
 
@@ -182,10 +210,13 @@ const getAllOrders = catchAsync(async (req, res) => {
         }
     }
 
-    // Count pending QC count across all orders for badge
-    const totalPendingQCOrders = await Order.countDocuments({
-        'suits.stitchingStatus': 'Submitted for Inspection'
-    });
+    // Counts across all categories for tab badges
+    const [totalPendingQCOrders, totalActiveOrders, totalDeliveredOrders, totalAllOrders] = await Promise.all([
+        Order.countDocuments({ 'suits.stitchingStatus': 'Submitted for Inspection' }),
+        Order.countDocuments({ orderStatus: { $nin: ['Delivered', 'Cancelled'] } }),
+        Order.countDocuments({ orderStatus: 'Delivered' }),
+        Order.countDocuments({})
+    ]);
 
     // If page or limit is provided, perform database-level server-side pagination
     if (page || limit) {
@@ -212,7 +243,13 @@ const getAllOrders = catchAsync(async (req, res) => {
                 totalPages,
                 pageSize
             },
-            totalPendingQC: totalPendingQCOrders
+            totalPendingQC: totalPendingQCOrders,
+            counts: {
+                all: totalAllOrders,
+                active: totalActiveOrders,
+                delivered: totalDeliveredOrders,
+                pendingQC: totalPendingQCOrders
+            }
         });
     }
 
@@ -379,12 +416,23 @@ const trackSuitPublic = catchAsync(async (req, res) => {
 // 8. DELIVER ORDER & SETTLE PAYMENT / RECORD UDHAR OR OVERPAYMENT
 const deliverOrder = catchAsync(async (req, res) => {
     const { id } = req.params;
-    const { receivedAmount = 0, paymentMethod = 'Cash' } = req.body;
+    const { receivedAmount = 0, paymentMethod = 'Cash', deliveredBy } = req.body;
 
     const order = await Order.findById(id).populate('customer');
     if (!order) {
         res.status(404);
         throw new Error('Order not found');
+    }
+
+    let parsedDeliveredBy = { userType: 'admin', name: 'Admin' };
+    if (typeof deliveredBy === 'string') {
+        try {
+            parsedDeliveredBy = JSON.parse(deliveredBy);
+        } catch (e) {
+            parsedDeliveredBy = { userType: 'admin', name: deliveredBy };
+        }
+    } else if (deliveredBy && typeof deliveredBy === 'object') {
+        parsedDeliveredBy = deliveredBy;
     }
 
     const numReceived = Number(receivedAmount) || 0;
@@ -396,8 +444,10 @@ const deliverOrder = catchAsync(async (req, res) => {
     order.receivedAtDelivery = {
         amount: numReceived,
         date: new Date(),
-        paymentMethod: paymentMethod || 'Cash'
+        paymentMethod: paymentMethod || 'Cash',
+        receivedBy: parsedDeliveredBy.name || 'Admin'
     };
+    order.deliveredBy = parsedDeliveredBy;
     order.balanceAmount = Math.max(0, previousBalance - numReceived);
 
     // If there is a customer attached, update their khata

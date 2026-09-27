@@ -111,6 +111,16 @@ const orderSchema = new mongoose.Schema({
             default: 'none' 
         },
         amount: { type: Number, default: 0 }
+    },
+    createdBy: {
+        userType: { type: String, enum: ['admin', 'worker'], default: 'admin' },
+        workerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Worker', default: null },
+        name: { type: String, default: 'Admin' }
+    },
+    deliveredBy: {
+        userType: { type: String, enum: ['admin', 'worker'], default: 'admin' },
+        workerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Worker', default: null },
+        name: { type: String, default: 'Admin' }
     }
 }, { timestamps: true });
 

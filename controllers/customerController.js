@@ -43,7 +43,26 @@ const createCustomer = asyncHandler(async (req, res) => {
     }
 
     // Check if customer already exists
-    const customerExists = await Customer.findOne({ phone });
+    let cleanPhone = String(phone).trim();
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
+        cleanPhone = '0' + digitsOnly;
+    } else if (digitsOnly.length === 12 && digitsOnly.startsWith('923')) {
+        cleanPhone = '0' + digitsOnly.slice(2);
+    } else if (digitsOnly.length === 11 && digitsOnly.startsWith('03')) {
+        cleanPhone = digitsOnly;
+    }
+
+    const withoutZero = cleanPhone.startsWith('0') ? cleanPhone.slice(1) : cleanPhone;
+    const numVal = Number(withoutZero);
+
+    const customerExists = await Customer.findOne({
+        $or: [
+            { phone: cleanPhone },
+            { phone: withoutZero },
+            ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+        ]
+    });
     if (customerExists) {
         res.status(400);
         throw new Error('Customer with this phone number already exists');
@@ -81,7 +100,7 @@ const createCustomer = asyncHandler(async (req, res) => {
     const customer = await Customer.create({ 
         customerNumber,
         name, 
-        phone, 
+        phone: cleanPhone, 
         whatsapp: whatsapp || '',
         address: address || '',
         city: city || '',
@@ -99,7 +118,20 @@ const createCustomer = asyncHandler(async (req, res) => {
 const loginCustomer = asyncHandler(async (req, res) => {
     const { phone, pin } = req.body;
 
-    const customer = await Customer.findOne({ phone });
+    const cleanPhone = String(phone).trim();
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    const withZero = digitsOnly.startsWith('0') ? digitsOnly : '0' + digitsOnly;
+    const withoutZero = digitsOnly.startsWith('0') ? digitsOnly.slice(1) : digitsOnly;
+    const numVal = Number(withoutZero);
+
+    const customer = await Customer.findOne({
+        $or: [
+            { phone: cleanPhone },
+            { phone: withZero },
+            { phone: withoutZero },
+            ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+        ]
+    });
 
     if (customer && (await customer.matchPin(pin))) {
         res.json({
@@ -136,6 +168,11 @@ const getCustomers = asyncHandler(async (req, res) => {
 
         if (!isNaN(numSearch) && numSearch > 0) {
             query.$or.push({ customerNumber: numSearch });
+            query.$or.push({ phone: numSearch });
+            const noLeading = cleanSearch.replace(/^0+/, '');
+            if (noLeading && Number(noLeading)) {
+                query.$or.push({ phone: Number(noLeading) });
+            }
         }
     }
 
@@ -216,7 +253,18 @@ const updateCustomer = asyncHandler(async (req, res) => {
     }
 
     customer.name = name !== undefined ? name : customer.name;
-    customer.phone = phone !== undefined ? phone : customer.phone;
+    if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+        let cleanPhone = String(phone).trim();
+        const digitsOnly = cleanPhone.replace(/\D/g, '');
+        if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
+            cleanPhone = '0' + digitsOnly;
+        } else if (digitsOnly.length === 12 && digitsOnly.startsWith('923')) {
+            cleanPhone = '0' + digitsOnly.slice(2);
+        } else if (digitsOnly.length === 11 && digitsOnly.startsWith('03')) {
+            cleanPhone = digitsOnly;
+        }
+        customer.phone = cleanPhone;
+    }
     customer.whatsapp = whatsapp !== undefined ? whatsapp : customer.whatsapp;
     customer.address = address !== undefined ? address : customer.address;
     customer.city = city !== undefined ? city : customer.city;
@@ -249,7 +297,20 @@ const deleteCustomer = asyncHandler(async (req, res) => {
 
 // 7. SEARCHING CUSTOMER BY PHONE NUMBER
 const searchCustomerByPhone = asyncHandler(async (req, res) => {
-    const customer = await Customer.findOne({ phone: req.params.phone });
+    const cleanPhone = String(req.params.phone).trim();
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    const withZero = digitsOnly.startsWith('0') ? digitsOnly : '0' + digitsOnly;
+    const withoutZero = digitsOnly.startsWith('0') ? digitsOnly.slice(1) : digitsOnly;
+    const numVal = Number(withoutZero);
+
+    const customer = await Customer.findOne({
+        $or: [
+            { phone: cleanPhone },
+            { phone: withZero },
+            { phone: withoutZero },
+            ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+        ]
+    });
     res.status(200).json(customer);
 });
 
@@ -491,7 +552,20 @@ const getCustomerKhataBalance = asyncHandler(async (req, res) => {
     if (identifier.match(/^[0-9a-fA-F]{24}$/)) {
         customer = await Customer.findById(identifier).select('name customerNumber phone khataBalance');
     } else {
-        customer = await Customer.findOne({ phone: identifier }).select('name customerNumber phone khataBalance');
+        const cleanPhone = String(identifier).trim();
+        const digitsOnly = cleanPhone.replace(/\D/g, '');
+        const withZero = digitsOnly.startsWith('0') ? digitsOnly : '0' + digitsOnly;
+        const withoutZero = digitsOnly.startsWith('0') ? digitsOnly.slice(1) : digitsOnly;
+        const numVal = Number(withoutZero);
+
+        customer = await Customer.findOne({
+            $or: [
+                { phone: cleanPhone },
+                { phone: withZero },
+                { phone: withoutZero },
+                ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+            ]
+        }).select('name customerNumber phone khataBalance');
     }
 
     if (!customer) {

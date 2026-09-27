@@ -6,17 +6,27 @@ const {
     logoutAdmin, 
     loginWorker,
     getAdminProfile,
-    updateAdminProfile
+    updateAdminProfile,
+    forgotPassword,
+    resetPassword
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
 // Route: POST /api/auth/register
-// Kaam: Naya admin banana (Sirf ek dafa chalega)
+// Kaam: Naya admin banana
 router.post('/register', registerAdmin);
 
 // Route: POST /api/auth/login
 // Kaam: Admin login karna aur Token (JWT) lena
 router.post('/login', loginAdmin);
+
+// Route: POST /api/auth/forgot-password
+// Kaam: Password reset link email karna
+router.post('/forgot-password', forgotPassword);
+
+// Route: POST /api/auth/reset-password/:token
+// Kaam: Naya password verify kar ke save karna
+router.post('/reset-password/:token', resetPassword);
 
 // Route: POST /api/auth/worker-login
 // Kaam: Worker login karna aur Token (JWT) lena

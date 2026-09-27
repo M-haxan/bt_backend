@@ -6,17 +6,43 @@ const Expense = require('../models/Expense');
 const Supplier = require('../models/Supplier');
 const catchAsync = require('../middleware/asyncHandler');
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
+const { validatePassword } = require('./authController');
 
 // 1. CREATE WORKER
 const createWorker = catchAsync(async (req, res) => {
-    const { name, phone, password, perSuitWage, advanceAmount, address, specialization } = req.body;
+    const { name, phone, password, perSuitWage, advanceAmount, address, specialization, canCreateOrder, canDeliverOrder } = req.body;
 
     if (!name || !phone || !password || perSuitWage === undefined) {
         res.status(400);
         throw new Error('Name, phone, password, and per-suit wage are required');
     }
 
-    const workerExists = await Worker.findOne({ phone });
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        res.status(400);
+        throw new Error(passwordError);
+    }
+
+    let cleanPhone = String(phone).trim();
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
+        cleanPhone = '0' + digitsOnly;
+    } else if (digitsOnly.length === 12 && digitsOnly.startsWith('923')) {
+        cleanPhone = '0' + digitsOnly.slice(2);
+    } else if (digitsOnly.length === 11 && digitsOnly.startsWith('03')) {
+        cleanPhone = digitsOnly;
+    }
+
+    const withoutZero = cleanPhone.startsWith('0') ? cleanPhone.slice(1) : cleanPhone;
+    const numVal = Number(withoutZero);
+
+    const workerExists = await Worker.findOne({
+        $or: [
+            { phone: cleanPhone },
+            { phone: withoutZero },
+            ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+        ]
+    });
     if (workerExists) {
         res.status(400);
         throw new Error('A worker with this phone number already exists');
@@ -30,13 +56,15 @@ const createWorker = catchAsync(async (req, res) => {
 
     const worker = await Worker.create({
         name,
-        phone: Number(phone),
+        phone: cleanPhone,
         password,
         profileImage,
         perSuitWage: Number(perSuitWage),
         advanceAmount: Number(advanceAmount) || 0,
         address,
-        specialization
+        specialization,
+        canCreateOrder: canCreateOrder === 'true' || canCreateOrder === true,
+        canDeliverOrder: canDeliverOrder === 'true' || canDeliverOrder === true
     });
 
     if (worker.advanceAmount > 0) {
@@ -75,11 +103,16 @@ const getWorkers = catchAsync(async (req, res) => {
         query.$or = [
             { name: regex },
             { address: regex },
-            { specialization: regex }
+            { specialization: regex },
+            { phone: regex }
         ];
 
         if (!isNaN(numSearch) && numSearch > 0) {
             query.$or.push({ phone: numSearch });
+            const noLeading = cleanSearch.replace(/^0+/, '');
+            if (noLeading && Number(noLeading)) {
+                query.$or.push({ phone: Number(noLeading) });
+            }
         }
     }
 
@@ -129,17 +162,39 @@ const updateWorker = catchAsync(async (req, res) => {
         throw new Error('Worker not found');
     }
 
-    const { name, phone, password, perSuitWage, advanceAmount, address, specialization, isActive } = req.body;
+    const { name, phone, password, perSuitWage, advanceAmount, address, specialization, isActive, canCreateOrder, canDeliverOrder } = req.body;
 
     worker.name = name || worker.name;
-    worker.phone = phone ? Number(phone) : worker.phone;
+    if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+        let cleanPhone = String(phone).trim();
+        const digitsOnly = cleanPhone.replace(/\D/g, '');
+        if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
+            cleanPhone = '0' + digitsOnly;
+        } else if (digitsOnly.length === 12 && digitsOnly.startsWith('923')) {
+            cleanPhone = '0' + digitsOnly.slice(2);
+        } else if (digitsOnly.length === 11 && digitsOnly.startsWith('03')) {
+            cleanPhone = digitsOnly;
+        }
+        worker.phone = cleanPhone;
+    }
     worker.perSuitWage = perSuitWage !== undefined ? Number(perSuitWage) : worker.perSuitWage;
     worker.advanceAmount = advanceAmount !== undefined ? Number(advanceAmount) : worker.advanceAmount;
     worker.address = address !== undefined ? address : worker.address;
     worker.specialization = specialization !== undefined ? specialization : worker.specialization;
-    worker.isActive = isActive !== undefined ? isActive : worker.isActive;
+    worker.isActive = isActive !== undefined ? (isActive === 'true' || isActive === true) : worker.isActive;
+    if (canCreateOrder !== undefined) {
+        worker.canCreateOrder = canCreateOrder === 'true' || canCreateOrder === true;
+    }
+    if (canDeliverOrder !== undefined) {
+        worker.canDeliverOrder = canDeliverOrder === 'true' || canDeliverOrder === true;
+    }
 
-    if (password) {
+    if (password && password.trim() !== '') {
+        const passwordError = validatePassword(password);
+        if (passwordError) {
+            res.status(400);
+            throw new Error(passwordError);
+        }
         worker.password = password; // pre-save hook will hash it
     }
 
@@ -307,13 +362,18 @@ const getWorkerDashboard = catchAsync(async (req, res) => {
 
     res.status(200).json({
         worker: {
+            _id: worker._id,
+            id: worker._id,
             name: worker.name,
             phone: worker.phone,
             profileImage: worker.profileImage,
             perSuitWage: worker.perSuitWage,
             advanceAmount: worker.advanceAmount,
             address: worker.address,
-            specialization: worker.specialization
+            specialization: worker.specialization,
+            isActive: worker.isActive,
+            canCreateOrder: Boolean(worker.canCreateOrder),
+            canDeliverOrder: Boolean(worker.canDeliverOrder)
         },
         stats: {
             totalStitched,

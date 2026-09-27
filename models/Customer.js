@@ -13,8 +13,9 @@ const customerSchema = new mongoose.Schema({
         trim: true
     },
     phone: {
-        type: Number,
-        required: true
+        type: String,
+        required: true,
+        trim: true
     },
     whatsapp: {
         type: String,

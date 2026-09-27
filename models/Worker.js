@@ -7,9 +7,10 @@ const workerSchema = new mongoose.Schema({
         required: true
     },
     phone: {
-        type: Number,
+        type: String,
         required: true,
-        unique: true
+        unique: true,
+        trim: true
     },
     password: {
         type: String,
@@ -31,7 +32,6 @@ const workerSchema = new mongoose.Schema({
     },
     specialization: {
         type: String,
-        enum: ['Kameez Stitcher', 'Complete Suit Stitcher', 'Cutter', 'Helper'],
         default: 'Complete Suit Stitcher'
     },
     address: {
@@ -44,6 +44,14 @@ const workerSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    canCreateOrder: {
+        type: Boolean,
+        default: false
+    },
+    canDeliverOrder: {
+        type: Boolean,
+        default: false
     }
 }, { timestamps: true });
 

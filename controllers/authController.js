@@ -1,7 +1,25 @@
 const User = require('../models/User');
 const Worker = require('../models/Worker');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const sendEmail = require('../utils/sendEmail');
 const catchAsync = require('../middleware/asyncHandler');
+
+// Password Complexity Validation Helper
+// Minimum 8 characters, at least 1 special character
+const validatePassword = (password) => {
+    if (!password || typeof password !== 'string') {
+        return 'Password is required';
+    }
+    if (password.length < 8) {
+        return 'Password must be at least 8 characters long';
+    }
+    const specialCharRegex = /[!@#$%^&*(),.?":{}|<>_\-+=\\/\[\]`~]/;
+    if (!specialCharRegex.test(password)) {
+        return 'Password must contain at least one special character (e.g. !@#$%^&*).';
+    }
+    return null;
+};
 
 // Token Generate aur Cookie set karne ka function
 const generateToken = (res, id) => {
@@ -18,25 +36,37 @@ const generateToken = (res, id) => {
     return token;
 };
 
-// 1. REGISTER ADMIN (Ek dafa chalega)
+// 1. REGISTER ADMIN (Accessible via hidden registration route)
 const registerAdmin = catchAsync(async (req, res) => {
     const { name, email, password } = req.body;
 
-    // SECURITY CHECK: Dekho kya database mein pehle se koi admin hai?
-    const adminExists = await User.countDocuments();
-    if (adminExists >= 1) {
-        res.status(403); // Forbidden
-        throw new Error('Admin pehle se mojood hai. Mazeed signups allowed nahi hain.');
+    if (!name || !email || !password) {
+        res.status(400);
+        throw new Error('Name, email, and password are required');
+    }
+
+    // Password validation (8+ characters, at least 1 special character)
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        res.status(400);
+        throw new Error(passwordError);
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) {
+        res.status(400);
+        throw new Error('An account with this email address already exists');
     }
 
     const user = await User.create({
-        name,
-        email,
+        name: name.trim(),
+        email: cleanEmail,
         password
     });
 
     if (user) {
-       const token = generateToken(res, user._id);
+        const token = generateToken(res, user._id);
 
         res.status(201).json({
             _id: user._id,
@@ -94,8 +124,21 @@ const loginWorker = catchAsync(async (req, res) => {
         throw new Error('Phone number and password are required');
     }
 
-    // Phone se worker search karein
-    const worker = await Worker.findOne({ phone: Number(phone) });
+    const cleanPhone = String(phone).trim();
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    const withZero = digitsOnly.startsWith('0') ? digitsOnly : '0' + digitsOnly;
+    const withoutZero = digitsOnly.startsWith('0') ? digitsOnly.slice(1) : digitsOnly;
+    const numVal = Number(withoutZero);
+
+    // Flexible phone lookup for legacy and new accounts
+    const worker = await Worker.findOne({
+        $or: [
+            { phone: cleanPhone },
+            { phone: withZero },
+            { phone: withoutZero },
+            ...(isNaN(numVal) ? [] : [{ phone: numVal }])
+        ]
+    });
 
     if (worker && (await worker.matchPassword(password))) {
         // Active check karein
@@ -111,6 +154,8 @@ const loginWorker = catchAsync(async (req, res) => {
             name: worker.name,
             phone: worker.phone,
             role: worker.role,
+            canCreateOrder: Boolean(worker.canCreateOrder),
+            canDeliverOrder: Boolean(worker.canDeliverOrder),
             token: token
         });
     } else {
@@ -163,9 +208,10 @@ const updateAdminProfile = catchAsync(async (req, res) => {
             throw new Error('Current password is incorrect');
         }
 
-        if (newPassword.length < 6) {
+        const passwordError = validatePassword(newPassword);
+        if (passwordError) {
             res.status(400);
-            throw new Error('New password must be at least 6 characters');
+            throw new Error(passwordError);
         }
 
         user.password = newPassword;
@@ -181,11 +227,128 @@ const updateAdminProfile = catchAsync(async (req, res) => {
     });
 });
 
+// 7. FORGOT PASSWORD (Send Reset Link to Email)
+const forgotPassword = catchAsync(async (req, res) => {
+    const { email } = req.body;
+    if (!email) {
+        res.status(400);
+        throw new Error('Please enter your registered email address');
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+        res.status(404);
+        throw new Error('This email is not registered with any admin account. Please enter your registered email address.');
+    }
+
+    // Generate crypto token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 Hour
+    await user.save({ validateBeforeSave: false });
+
+    // Client Reset URL
+    const origin = req.get('origin') || process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetUrl = `${origin}/reset-password/${resetToken}`;
+
+    const htmlMessage = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; color: #1e293b;">
+        <div style="background-color: #0F172A; padding: 24px; text-align: center;">
+          <h1 style="color: #DFAC43; margin: 0; font-size: 24px; letter-spacing: 2px; text-transform: uppercase;">BALOUCH TAILORS</h1>
+          <p style="color: #94a3b8; margin: 4px 0 0 0; font-size: 12px; letter-spacing: 1px;">Admin Security & Password Reset</p>
+        </div>
+        <div style="padding: 30px 24px;">
+          <h2 style="color: #0f172a; font-size: 18px; margin-top: 0;">Hello ${user.name || 'Admin'},</h2>
+          <p style="font-size: 14px; line-height: 1.6; color: #475569;">
+            We received a request to reset the password for your Balouch Tailors administrative account (<strong>${user.email}</strong>).
+          </p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" style="background-color: #DFAC43; color: #000000; font-weight: bold; text-decoration: none; padding: 12px 28px; border-radius: 6px; display: inline-block; font-size: 14px; letter-spacing: 0.5px;">
+              Reset My Password
+            </a>
+          </div>
+          <p style="font-size: 13px; color: #64748b; line-height: 1.5;">
+            Or copy and paste this link into your browser:<br/>
+            <a href="${resetUrl}" style="color: #2563eb; word-break: break-all; font-size: 12px;">${resetUrl}</a>
+          </p>
+          <div style="background-color: #f8fafc; border-left: 4px solid #DFAC43; padding: 12px; margin-top: 24px;">
+            <p style="margin: 0; font-size: 12px; color: #64748b;">
+              ⏱️ <strong>Note:</strong> This link is valid for <strong>1 hour</strong>. If you did not request a password reset, you can safely ignore this email.
+            </p>
+          </div>
+        </div>
+        <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+          © ${new Date().getFullYear()} Balouch Tailors. All rights reserved.
+        </div>
+      </div>
+    `;
+
+    try {
+        await sendEmail({
+            to: user.email,
+            subject: 'Balouch Tailors - Password Reset Link',
+            text: `You requested a password reset for your Balouch Tailors account. Please click the following link: ${resetUrl}`,
+            html: htmlMessage
+        });
+
+        res.status(200).json({
+            message: 'Password reset link has been sent to your email address.',
+            resetUrl: process.env.NODE_ENV === 'development' ? resetUrl : undefined
+        });
+    } catch (err) {
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+        await user.save({ validateBeforeSave: false });
+        res.status(500);
+        throw new Error(`Email could not be sent: ${err.message}`);
+    }
+});
+
+// 8. RESET PASSWORD (Verify Token & Update Password)
+const resetPassword = catchAsync(async (req, res) => {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        res.status(400);
+        throw new Error(passwordError);
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const user = await User.findOne({
+        resetPasswordToken: hashedToken,
+        resetPasswordExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+        res.status(400);
+        throw new Error('Password reset token is invalid or has expired. Please request a new one.');
+    }
+
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.status(200).json({
+        message: 'Password has been reset successfully! You can now login with your new password.'
+    });
+});
+
 module.exports = { 
     registerAdmin, 
     loginAdmin, 
     logoutAdmin, 
     loginWorker,
     getAdminProfile,
-    updateAdminProfile 
+    updateAdminProfile,
+    forgotPassword,
+    resetPassword,
+    validatePassword
 };
