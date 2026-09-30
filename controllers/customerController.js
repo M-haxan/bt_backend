@@ -155,25 +155,58 @@ const getCustomers = asyncHandler(async (req, res) => {
     let query = {};
     if (search && search.trim()) {
         const cleanSearch = search.trim();
-        const searchRegex = new RegExp(cleanSearch, 'i');
-        const numSearch = Number(cleanSearch);
+        // Escape regex special characters
+        const safeSearch = cleanSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchRegex = new RegExp(safeSearch, 'i');
 
-        query.$or = [
+        const orConditions = [
             { name: searchRegex },
             { phone: searchRegex },
+            { whatsapp: searchRegex },
             { city: searchRegex },
             { address: searchRegex },
             { cnic: searchRegex }
         ];
 
-        if (!isNaN(numSearch) && numSearch > 0) {
-            query.$or.push({ customerNumber: numSearch });
-            query.$or.push({ phone: numSearch });
-            const noLeading = cleanSearch.replace(/^0+/, '');
-            if (noLeading && Number(noLeading)) {
-                query.$or.push({ phone: Number(noLeading) });
+        // 1. Customer Number search (handles "1001", "C-1001", "#C-1001", "#1001")
+        const idMatch = cleanSearch.replace(/^[#cCsS\-\s]+/, '');
+        const numId = Number(idMatch);
+        if (!isNaN(numId) && numId > 0) {
+            orConditions.push({ customerNumber: numId });
+        }
+
+        // 2. Flexible Phone Number Matching (digits with optional dashes/spaces/country codes)
+        const digits = cleanSearch.replace(/\D/g, '');
+        if (digits.length >= 3) {
+            // Pattern to match digits separated by optional dash, space, or dot
+            const flexPattern = digits.split('').join('[\\s\\-\\.]*');
+            orConditions.push({ phone: new RegExp(flexPattern, 'i') });
+            orConditions.push({ whatsapp: new RegExp(flexPattern, 'i') });
+
+            // If user typed with leading 0 (e.g., 03001234567), also match without leading 0 (3001234567)
+            if (digits.startsWith('0')) {
+                const noZero = digits.replace(/^0+/, '');
+                if (noZero.length >= 3) {
+                    const noZeroPattern = noZero.split('').join('[\\s\\-\\.]*');
+                    orConditions.push({ phone: new RegExp(noZeroPattern, 'i') });
+                    orConditions.push({ whatsapp: new RegExp(noZeroPattern, 'i') });
+                }
+            } else if (digits.startsWith('92') && digits.length >= 5) {
+                // If user typed country code 92300...
+                const localDigits = '0' + digits.slice(2);
+                const localPattern = localDigits.split('').join('[\\s\\-\\.]*');
+                orConditions.push({ phone: new RegExp(localPattern, 'i') });
+                orConditions.push({ whatsapp: new RegExp(localPattern, 'i') });
+            } else {
+                // If user typed without leading 0 (e.g., 3001234567), also match with leading 0
+                const withZero = '0' + digits;
+                const withZeroPattern = withZero.split('').join('[\\s\\-\\.]*');
+                orConditions.push({ phone: new RegExp(withZeroPattern, 'i') });
+                orConditions.push({ whatsapp: new RegExp(withZeroPattern, 'i') });
             }
         }
+
+        query.$or = orConditions;
     }
 
     // If page or limit is provided, perform database-level server-side pagination
