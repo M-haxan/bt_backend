@@ -5,7 +5,7 @@ const User = require('../models/User');
 const protect = catchAsync(async (req, res, next) => {
     let token;
 
-    // Check karna ke kya request ke cookies mein 'jwt' mojood hai, ya phir headers mein 'Authorization' mojood hai?
+    // Check if jwt exists in cookies or Bearer token in headers
     if (req.cookies && req.cookies.jwt) {
         token = req.cookies.jwt;
     } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
@@ -14,13 +14,13 @@ const protect = catchAsync(async (req, res, next) => {
 
     if (token) {
         try {
-            // Token ko apne secret key se verify (check) karna
+            // Verify token with JWT secret
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-            // Token ke andar user ki ID chhupi hoti hai. Us ID se database se user nikal kar 'req.user' mein daal do (password ke baghair)
+            // Fetch user by decoded ID
             let user = await User.findById(decoded.id).select('-password');
 
-            // Agar user (Admin) nahi mila, to Worker check karein
+            // If not admin, check worker
             if (!user) {
                 const Worker = require('../models/Worker');
                 user = await Worker.findById(decoded.id).select('-password');
@@ -32,17 +32,17 @@ const protect = catchAsync(async (req, res, next) => {
             }
 
             req.user = user;
-            next(); // Token theek hai, aage jane do!
+            next();
         } catch (error) {
             res.status(401);
-            throw new Error('Aap authorized nahi hain, Token fail ho gaya!');
+            throw new Error('Not authorized, token verification failed!');
         }
     }
 
-    // Agar token bheja hi na gaya ho
+    // If no token provided
     if (!token) {
         res.status(401);
-        throw new Error('Aap authorized nahi hain, Token mojood nahi hai!');
+        throw new Error('Not authorized, no token provided!');
     }
 });
 
