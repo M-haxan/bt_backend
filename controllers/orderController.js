@@ -20,6 +20,7 @@ const createOrder = catchAsync(async (req, res) => {
         advancePaid, 
         balanceAmount, 
         deliveryDate,
+        bookingDate,
         previousKhataAdjusted,
         createdBy
     } = req.body;
@@ -104,6 +105,7 @@ const createOrder = catchAsync(async (req, res) => {
         advancePaid: advancePaid || 0,
         balanceAmount: balanceAmount || 0,
         deliveryDate,
+        bookingDate: bookingDate ? new Date(bookingDate) : Date.now(),
         previousKhataAdjusted: previousKhataAdjusted || { type: 'none', amount: 0 },
         createdBy: parsedCreatedBy
     });
@@ -218,6 +220,64 @@ const getAllOrders = catchAsync(async (req, res) => {
         Order.countDocuments({})
     ]);
 
+    // High-performance DB-level Financial Aggregations for Payments Ledger
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const [
+        todayAdvanceResult, 
+        todayDeliveryResult,
+        receivablesResult,
+        partialResult,
+        fullyPaidCount,
+        unpaidCount
+    ] = await Promise.all([
+        // 1. Advance Cash collected at counter today
+        Order.aggregate([
+            { $match: { createdAt: { $gte: startOfToday, $lte: endOfToday }, advancePaid: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: '$advancePaid' } } }
+        ]),
+        // 2. Delivery Cash collected at counter today
+        Order.aggregate([
+            { $match: { 'receivedAtDelivery.date': { $gte: startOfToday, $lte: endOfToday }, 'receivedAtDelivery.amount': { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: '$receivedAtDelivery.amount' } } }
+        ]),
+        // 3. Total Outstanding Receivables in shop
+        Order.aggregate([
+            { $match: { balanceAmount: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: '$balanceAmount' } } }
+        ]),
+        // 4. Partially paid orders
+        Order.aggregate([
+            { $match: { balanceAmount: { $gt: 0 }, advancePaid: { $gt: 0 } } },
+            { $group: { _id: null, count: { $sum: 1 }, balance: { $sum: '$balanceAmount' } } }
+        ]),
+        // 5. Fully paid orders
+        Order.countDocuments({ balanceAmount: 0 }),
+        // 6. Completely unpaid orders
+        Order.countDocuments({ advancePaid: 0, balanceAmount: { $gt: 0 } })
+    ]);
+
+    const todayAdvance = todayAdvanceResult[0]?.total || 0;
+    const todayDeliveryCash = todayDeliveryResult[0]?.total || 0;
+    const todayCashCollected = todayAdvance + todayDeliveryCash;
+    const totalOutstandingBalance = receivablesResult[0]?.total || 0;
+    const partialPaidCount = partialResult[0]?.count || 0;
+    const partialPaidBalance = partialResult[0]?.balance || 0;
+
+    const financialStats = {
+        todayCashCollected,
+        todayAdvance,
+        todayDeliveryCash,
+        totalOutstandingBalance,
+        partialPaidCount,
+        partialPaidBalance,
+        fullyPaidCount: fullyPaidCount || 0,
+        unpaidCount: unpaidCount || 0
+    };
+
     // If page or limit is provided, perform database-level server-side pagination
     if (page || limit) {
         const currentPage = Math.max(1, parseInt(page, 10) || 1);
@@ -249,7 +309,8 @@ const getAllOrders = catchAsync(async (req, res) => {
                 active: totalActiveOrders,
                 delivered: totalDeliveredOrders,
                 pendingQC: totalPendingQCOrders
-            }
+            },
+            financialStats
         });
     }
 
