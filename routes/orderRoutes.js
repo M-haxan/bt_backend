@@ -3,6 +3,7 @@ const express = require('express');
 const { 
     createOrder, 
     getAllOrders, 
+    getOrderById,
     getCustomerOrders, 
     updateOrder, 
     deleteOrder,
@@ -34,6 +35,7 @@ router.route('/customer/:customerId')
     .get(protect, getCustomerOrders);
 
 router.route('/:id')
+    .get(protect, getOrderById)
     .put(protect, upload.array('fabricImages', 10), updateOrder)
     .delete(protect, deleteOrder);
 

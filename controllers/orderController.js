@@ -333,13 +333,86 @@ const getCustomerOrders = catchAsync(async (req, res) => {
     res.status(200).json(orders);
 });
 
+// 3.1 READ - Single Order Details By ID (For Order Edit / Full View)
+const getOrderById = catchAsync(async (req, res) => {
+    const order = await Order.findById(req.params.id)
+        .populate('customer')
+        .populate('suits.wearer')
+        .populate('alterations.wearer')
+        .populate('createdBy', 'name userType');
+
+    if (!order) {
+        res.status(404);
+        throw new Error('Order not found');
+    }
+
+    res.status(200).json(order);
+});
+
 // 4. UPDATE - Order Status ya Details Change Karna
 const updateOrder = catchAsync(async (req, res) => {
-    const { suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus } = req.body;
+    let suits = req.body.suits;
+    if (typeof suits === 'string') {
+        try { suits = JSON.parse(suits); } catch (e) { suits = []; }
+    }
+
+    let alterations = req.body.alterations;
+    if (typeof alterations === 'string') {
+        try { alterations = JSON.parse(alterations); } catch (e) { alterations = []; }
+    }
+
+    let orderItems = req.body.orderItems;
+    if (typeof orderItems === 'string') {
+        try { orderItems = JSON.parse(orderItems); } catch (e) { orderItems = []; }
+    }
+
+    const { 
+        customer,
+        totalAmount, 
+        advancePaid, 
+        balanceAmount, 
+        subtotal,
+        discountPercent,
+        discountAmount,
+        deliveryDate, 
+        bookingDate,
+        orderStatus 
+    } = req.body;
+
+    const updateFields = {};
+    if (customer) updateFields.customer = customer;
+    if (suits) updateFields.suits = suits;
+    if (alterations) updateFields.alterations = alterations;
+    if (orderItems) updateFields.orderItems = orderItems;
+    if (totalAmount !== undefined) updateFields.totalAmount = Number(totalAmount) || 0;
+    if (advancePaid !== undefined) updateFields.advancePaid = Number(advancePaid) || 0;
+    if (balanceAmount !== undefined) updateFields.balanceAmount = Number(balanceAmount) || 0;
+    if (subtotal !== undefined) updateFields.subtotal = Number(subtotal) || 0;
+    if (discountPercent !== undefined) updateFields.discountPercent = Number(discountPercent) || 0;
+    if (discountAmount !== undefined) updateFields.discountAmount = Number(discountAmount) || 0;
+    if (deliveryDate) updateFields.deliveryDate = new Date(deliveryDate);
+    if (bookingDate) updateFields.bookingDate = new Date(bookingDate);
+    if (orderStatus) updateFields.orderStatus = orderStatus;
+
+    // If new fabric photos were uploaded during edit
+    if (req.files && req.files.length > 0 && updateFields.suits) {
+        req.files.forEach((file) => {
+            const match = file.fieldname.match(/suitImage_(\d+)/);
+            if (match && match[1]) {
+                const suitIndex = parseInt(match[1], 10);
+                if (updateFields.suits[suitIndex]) {
+                    updateFields.suits[suitIndex].fabricImage = {
+                        url: file.path,
+                        publicId: file.filename
+                    };
+                }
+            }
+        });
+    }
 
     const updatedOrder = await Order.findByIdAndUpdate(
         req.params.id,
-        { suits, alterations, totalAmount, advancePaid, balanceAmount, deliveryDate, orderStatus },
+        updateFields,
         { new: true, runValidators: true }
     ).populate('customer'); 
     
@@ -570,6 +643,7 @@ const deliverOrder = catchAsync(async (req, res) => {
 module.exports = {
     createOrder,
     getAllOrders,
+    getOrderById,
     getCustomerOrders,
     updateOrder,
     deleteOrder,
