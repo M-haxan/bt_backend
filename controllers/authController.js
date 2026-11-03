@@ -51,7 +51,13 @@ const registerAdmin = catchAsync(async (req, res) => {
         res.status(400);
         throw new Error(passwordError);
     }
-
+    // Registration is only allowed while NO user exists yet (first-time setup).
+    // After the first admin exists, this route is closed.
+    const userCount = await User.countDocuments();
+    if (userCount > 0) {
+        res.status(403);
+        throw new Error('Registration is closed. An admin account already exists.');
+    }
     const cleanEmail = email.toLowerCase().trim();
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
@@ -62,7 +68,8 @@ const registerAdmin = catchAsync(async (req, res) => {
     const user = await User.create({
         name: name.trim(),
         email: cleanEmail,
-        password
+        password, 
+        role: 'admin'
     });
 
     if (user) {

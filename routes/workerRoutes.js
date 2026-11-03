@@ -24,18 +24,9 @@ const {
     deleteLedgerEntry
 } = require('../controllers/workerController');
 
-const { protect } = require('../middleware/authMiddleware');
+const { protect, adminOnly } = require('../middleware/authMiddleware');
 const { upload } = require('../config/cloudinary');
 
-// Middleware to check if user is admin
-const adminOnly = (req, res, next) => {
-    if (req.user && (req.user.role === 'admin' || req.user.role !== 'worker')) {
-        next();
-    } else {
-        res.status(403);
-        throw new Error('Not authorized, admin privileges required');
-    }
-};
 
 // Worker & QC routes
 router.get('/dashboard', protect, getWorkerDashboard);

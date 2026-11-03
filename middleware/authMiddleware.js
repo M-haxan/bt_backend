@@ -44,6 +44,16 @@ const protect = catchAsync(async (req, res, next) => {
         res.status(401);
         throw new Error('Not authorized, no token provided!');
     }
-});
+    // Allows the request only if the logged-in user is an admin.
+// Must be used AFTER `protect`, because it relies on req.user.
 
-module.exports = { protect };
+
+});
+const adminOnly = (req, res, next) => {
+    if (req.user && req.user.role === 'admin') {
+        return next();
+    }
+    res.status(403);
+    throw new Error('Access denied: admin privileges required');
+};
+module.exports = { protect, adminOnly };
