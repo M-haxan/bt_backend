@@ -17,7 +17,8 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        default: 'admin' // Automatic role admin
+        enum: ['admin', 'worker'],
+        default: 'worker' // Automatic role admin
     },
     resetPasswordToken: {
         type: String
@@ -26,7 +27,6 @@ const userSchema = new mongoose.Schema({
         type: Date
     }
 }, { timestamps: true });
-
 // Password save hone se pehle usko Encrypt (Hash) karna
 userSchema.pre('save', async function () {
     // Agar password change nahi hua toh aage barh jao
@@ -37,7 +37,6 @@ userSchema.pre('save', async function () {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
 });
-
 // Password check karne ka function (Login ke waqt kaam aayega)
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);

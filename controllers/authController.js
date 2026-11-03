@@ -24,7 +24,7 @@ const validatePassword = (password) => {
 // Token Generate aur Cookie set karne ka function
 const generateToken = (res, id) => {
     // Token 30 din tak valid rahega
-    const token = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '15m' });
 
     // Set JWT as HTTP-Only Cookie
     res.cookie('jwt', token, {
@@ -341,10 +341,10 @@ const resetPassword = catchAsync(async (req, res) => {
     });
 });
 
-module.exports = { 
-    registerAdmin, 
-    loginAdmin, 
-    logoutAdmin, 
+module.exports = {
+    registerAdmin,
+    loginAdmin,
+    logoutAdmin,
     loginWorker,
     getAdminProfile,
     updateAdminProfile,
