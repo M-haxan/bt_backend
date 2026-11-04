@@ -1,11 +1,10 @@
 const express = require('express');
-// Import the order controller
-const { 
-    createOrder, 
-    getAllOrders, 
+const {
+    createOrder,
+    getAllOrders,
     getOrderById,
-    getCustomerOrders, 
-    updateOrder, 
+    getCustomerOrders,
+    updateOrder,
     deleteOrder,
     trackOrderPublic,
     trackSuitPublic,
@@ -13,31 +12,29 @@ const {
 } = require('../controllers/orderController');
 
 const { upload } = require('../config/cloudinary');
-// Import the protect middleware
-const { protect } = require('../middleware/authMiddleware');
+const { protect, adminOnly, requirePermission } = require('../middleware/authMiddleware');
 
-// Create a new router
 const router = express.Router();
 
-// Public Tracking routes (unprotected)
+// Public tracking (unchanged)
 router.get('/track/:orderNumber', trackOrderPublic);
 router.get('/track/suit/:suitId', trackSuitPublic);
 
-// Delivery & Payment Settle route
-router.put('/:id/deliver', protect, deliverOrder);
+// Deliver: admin, or worker with delivery permission
+router.put('/:id/deliver', protect, requirePermission('canDeliverOrder'), deliverOrder);
 
-// Define the routes
 router.route('/')
-    .post(protect, upload.array('fabricImages', 10), createOrder)
-    .get(protect, getAllOrders);
+    // Book order: admin, or worker with booking permission
+    .post(protect, requirePermission('canCreateOrder'), upload.array('fabricImages', 10), createOrder)
+    // View/search orders: admin, or worker who books or delivers
+    .get(protect, requirePermission('canCreateOrder', 'canDeliverOrder'), getAllOrders);
 
 router.route('/customer/:customerId')
-    .get(protect, getCustomerOrders);
+    .get(protect, requirePermission('canCreateOrder', 'canDeliverOrder'), getCustomerOrders);
 
 router.route('/:id')
-    .get(protect, getOrderById)
-    .put(protect, upload.array('fabricImages', 10), updateOrder)
-    .delete(protect, deleteOrder);
+    .get(protect, requirePermission('canCreateOrder', 'canDeliverOrder'), getOrderById)
+    .put(protect, requirePermission('canCreateOrder'), upload.array('fabricImages', 10), updateOrder)
+    .delete(protect, adminOnly, deleteOrder);
 
-// Export the router
 module.exports = router;

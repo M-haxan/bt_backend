@@ -1,38 +1,36 @@
-// importing express
 const express = require('express');
-// importing router
 const router = express.Router();
-// importing controllers
-const { 
-    createCustomer, 
-    getCustomers, 
-    getCustomerById, 
+const {
+    createCustomer,
+    getCustomers,
+    getCustomerById,
     getCustomerProfile,
-    updateCustomer, 
-    deleteCustomer, 
+    updateCustomer,
+    deleteCustomer,
     updateMeasurements,
     deleteMeasurementCategory,
     getCustomerLedger,
     settleCustomerKhata,
     getCustomerKhataBalance
 } = require('../controllers/customerController');
-// importing protect middleware
-const { protect } = require('../middleware/authMiddleware');
-// importing upload middleware
+const { protect, adminOnly, requirePermission } = require('../middleware/authMiddleware');
 const { upload } = require('../config/cloudinary');
 
-// creating routes
-router.post('/', protect, upload.single('profileImage'), createCustomer);
-router.get('/', protect, getCustomers);
-router.get('/khata/:identifier', protect, getCustomerKhataBalance);
-router.get('/:id/profile', protect, getCustomerProfile);
-router.get('/:id/ledger', protect, getCustomerLedger);
-router.post('/:id/settle', protect, settleCustomerKhata);
-router.get('/:id', protect, getCustomerById);
-router.put('/:id', protect, upload.single('profileImage'), updateCustomer);
-router.delete('/:id', protect, deleteCustomer);
-router.put('/:id/measurements', protect, updateMeasurements);
-router.delete('/:id/measurements/:category', protect, deleteMeasurementCategory);
+// Reading customers: admin, or a worker allowed to book OR deliver
+router.get('/', protect, requirePermission('canCreateOrder', 'canDeliverOrder'), getCustomers);
+router.get('/khata/:identifier', protect, adminOnly, requirePermission('canCreateOrder', 'canDeliverOrder'), getCustomerKhataBalance);
+router.get('/:id', protect, requirePermission('canCreateOrder', 'canDeliverOrder'), getCustomerById);
 
-// exporting router
+// Creating customers and saving measurements: only workers allowed to book
+router.post('/', protect, requirePermission('canCreateOrder'), upload.single('profileImage'), createCustomer);
+router.put('/:id/measurements', protect, requirePermission('canCreateOrder'), updateMeasurements);
+
+// Money records, full profile, editing, deleting: admin only
+router.get('/:id/profile', protect, adminOnly, getCustomerProfile);
+router.get('/:id/ledger', protect, adminOnly, getCustomerLedger);
+router.post('/:id/settle', protect, adminOnly, settleCustomerKhata);
+router.put('/:id', protect, adminOnly, upload.single('profileImage'), updateCustomer);
+router.delete('/:id', protect, adminOnly, deleteCustomer);
+router.delete('/:id/measurements/:category', protect, adminOnly, deleteMeasurementCategory);
+
 module.exports = router;

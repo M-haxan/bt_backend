@@ -21,16 +21,14 @@ const validatePassword = (password) => {
     return null;
 };
 
-// Token Generate aur Cookie set karne ka function
-const generateToken = (res, id) => {
-    // Token 30 din tak valid rahega
-    const token = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '15m' });
+const generateToken = (res, id, tokenVersion = 0) => {
+    const token = jwt.sign({ id, tv: tokenVersion }, process.env.JWT_SECRET, { expiresIn: '15m' });
 
     // Set JWT as HTTP-Only Cookie
     res.cookie('jwt', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV !== 'development', // Use secure cookies in production
-        sameSite: 'none', // Prevent CSRF attacks
+        sameSite: 'none',
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
     return token;
@@ -73,7 +71,7 @@ const registerAdmin = catchAsync(async (req, res) => {
     });
 
     if (user) {
-        const token = generateToken(res, user._id);
+        const token = generateToken(res, user._id, user.tokenVersion);
 
         res.status(201).json({
             _id: user._id,
@@ -93,11 +91,11 @@ const loginAdmin = catchAsync(async (req, res) => {
     const { email, password } = req.body;
 
     // Email se user dhoondo
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }).select('+password');
 
     // Agar user mil jaye aur password match kar jaye
     if (user && (await user.matchPassword(password))) {
-        const token = generateToken(res, user._id);
+        const token = generateToken(res, user._id, user.tokenVersion);
 
         res.json({
             _id: user._id,
@@ -145,7 +143,7 @@ const loginWorker = catchAsync(async (req, res) => {
             { phone: withoutZero },
             ...(isNaN(numVal) ? [] : [{ phone: numVal }])
         ]
-    });
+    }).select('+password');
 
     if (worker && (await worker.matchPassword(password))) {
         // Active check karein
@@ -154,7 +152,7 @@ const loginWorker = catchAsync(async (req, res) => {
             throw new Error('Worker account is inactive. Please contact admin.');
         }
 
-        const token = generateToken(res, worker._id);
+        const token = generateToken(res, worker._id, worker.tokenVersion);
 
         res.json({
             _id: worker._id,
@@ -184,7 +182,7 @@ const getAdminProfile = catchAsync(async (req, res) => {
 // 6. UPDATE ADMIN PROFILE (Protected)
 const updateAdminProfile = catchAsync(async (req, res) => {
     const { name, email, currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.user._id).select('+password');
 
     if (!user) {
         res.status(404);
@@ -222,6 +220,7 @@ const updateAdminProfile = catchAsync(async (req, res) => {
         }
 
         user.password = newPassword;
+        user.tokenVersion = (user.tokenVersion || 0) + 1; // logs out all other sessions
     }
 
     const updatedUser = await user.save();
@@ -339,6 +338,7 @@ const resetPassword = catchAsync(async (req, res) => {
     }
 
     user.password = password;
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // old tokens stop working
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();

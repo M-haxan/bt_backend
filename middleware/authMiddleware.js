@@ -30,7 +30,17 @@ const protect = catchAsync(async (req, res, next) => {
                 res.status(401);
                 throw new Error('User not found, authentication failed!');
             }
+            // Check 1: a deactivated worker is rejected immediately
+            if (user.isActive === false) {
+                res.status(401);
+                throw new Error('Account is deactivated. Please contact admin.');
+            }
 
+            // Check 2: token was issued before the last password change / forced logout
+            if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+                res.status(401);
+                throw new Error('Session expired. Please log in again.');
+            }
             req.user = user;
             next();
         } catch (error) {
@@ -56,4 +66,23 @@ const adminOnly = (req, res, next) => {
     res.status(403);
     throw new Error('Access denied: admin privileges required');
 };
-module.exports = { protect, adminOnly };
+const requirePermission = (...permissionNames) => (req, res, next) => {
+    if (!req.user) {
+        res.status(401);
+        throw new Error('Not authorized');
+    }
+
+    if (req.user.role === 'admin') {
+        return next();
+    }
+
+    const hasPermission = permissionNames.some((name) => req.user[name] === true);
+    if (hasPermission) {
+        return next();
+    }
+
+    res.status(403);
+    throw new Error('You do not have permission to perform this action');
+};
+
+module.exports = { protect, adminOnly, requirePermission };

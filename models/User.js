@@ -13,7 +13,12 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true
+        required: true,
+        select: false  // Password database mein dikhega nahi     
+    },
+    tokenVersion: {
+        type: Number,
+        default: 0
     },
     role: {
         type: String,
@@ -26,7 +31,21 @@ const userSchema = new mongoose.Schema({
     resetPasswordExpires: {
         type: Date
     }
-}, { timestamps: true });
+}, {
+    timestamps: true,
+    toJSON: {
+        
+        // Runs whenever a User is sent with res.json(). Removes secret fields.
+        
+        transform(doc, ret) {
+            delete ret.tokenVersion;
+            delete ret.password;
+            delete ret.resetPasswordToken;
+            delete ret.resetPasswordExpires;
+            return ret;
+        }
+    }
+});
 // Password save hone se pehle usko Encrypt (Hash) karna
 userSchema.pre('save', async function () {
     // Agar password change nahi hua toh aage barh jao

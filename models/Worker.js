@@ -14,7 +14,12 @@ const workerSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true
+        required: true,
+        select: false
+    },
+    tokenVersion: {
+        type: Number,
+        default: 0
     },
     profileImage: {
         url: { type: String },
@@ -53,7 +58,14 @@ const workerSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     }
-}, { timestamps: true });
+}, { timestamps: true, 
+     toJSON: {
+        transform(doc, ret) {
+            delete ret.password;
+            return ret;
+        }
+    }
+ });
 
 // Hash password before saving
 workerSchema.pre('save', async function () {

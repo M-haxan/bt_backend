@@ -163,7 +163,12 @@ const updateWorker = catchAsync(async (req, res) => {
     }
 
     const { name, phone, password, perSuitWage, advanceAmount, address, specialization, isActive, canCreateOrder, canDeliverOrder } = req.body;
-
+    const wasActive = worker.isActive;
+    // If the worker was just deactivated, invalidate any existing tokens too,
+    // so they can't come back to life if the account is re-activated later.
+    if (wasActive && worker.isActive === false) {
+        worker.tokenVersion = (worker.tokenVersion || 0) + 1;
+    }
     worker.name = name || worker.name;
     if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
         let cleanPhone = String(phone).trim();
@@ -196,6 +201,7 @@ const updateWorker = catchAsync(async (req, res) => {
             throw new Error(passwordError);
         }
         worker.password = password; // pre-save hook will hash it
+        worker.tokenVersion = (worker.tokenVersion || 0) + 1; // old tokens stop working
     }
 
     if (req.file) {

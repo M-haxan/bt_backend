@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const catchAsync = require('../middleware/asyncHandler');
+const { customerFieldsFor } = require('../utils/customerFields');
 
 // Cloudinary helpers import kiye
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
@@ -157,6 +158,7 @@ const createOrder = catchAsync(async (req, res) => {
 // 2. READ - Sab Orders Dekhna (Supports DB Pagination, Search, and Status Filter)
 const getAllOrders = catchAsync(async (req, res) => {
     const { page, limit, search, status } = req.query;
+    const customerFields = customerFieldsFor(req.user);
 
     let filter = {};
 
@@ -288,9 +290,9 @@ const getAllOrders = catchAsync(async (req, res) => {
         const totalPages = Math.ceil(totalRecords / pageSize) || 1;
 
         const orders = await Order.find(filter)
-            .populate('customer')
-            .populate('suits.wearer')
-            .populate('alterations.wearer')
+                       .populate('customer', customerFields)
+            .populate('suits.wearer', customerFields)
+            .populate('alterations.wearer', customerFields)
             .sort({ bookingDate: -1, createdAt: -1 })
             .skip(skip)
             .limit(pageSize);
@@ -325,30 +327,31 @@ const getAllOrders = catchAsync(async (req, res) => {
 
 // 3. READ - Customer Specific Orders
 const getCustomerOrders = catchAsync(async (req, res) => {
+    const customerFields = customerFieldsFor(req.user);
+
     const orders = await Order.find({ customer: req.params.customerId })
-        .populate('customer')
-        .populate('suits.wearer')
-        .populate('alterations.wearer')
+        .populate('customer', customerFields)
+        .populate('suits.wearer', customerFields)
+        .populate('alterations.wearer', customerFields)
         .sort({ bookingDate: -1 });
     res.status(200).json(orders);
 });
-
 // 3.1 READ - Single Order Details By ID (For Order Edit / Full View)
 const getOrderById = catchAsync(async (req, res) => {
+    const customerFields = customerFieldsFor(req.user);
+
     const order = await Order.findById(req.params.id)
-        .populate('customer')
-        .populate('suits.wearer')
-        .populate('alterations.wearer')
+        .populate('customer', customerFields)
+        .populate('suits.wearer', customerFields)
+        .populate('alterations.wearer', customerFields)
         .populate('createdBy', 'name userType');
 
     if (!order) {
         res.status(404);
         throw new Error('Order not found');
     }
-
     res.status(200).json(order);
 });
-
 // 4. UPDATE - Order Status ya Details Change Karna
 const updateOrder = catchAsync(async (req, res) => {
     let suits = req.body.suits;

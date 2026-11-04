@@ -4,6 +4,7 @@ const CustomerLedger = require('../models/CustomerLedger');
 const asyncHandler = require('../middleware/asyncHandler');
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary'); 
 const jwt = require('jsonwebtoken');
+const { customerFieldsFor } = require('../utils/customerFields');
 
 // Token generate karne ka function
 const generateToken = (id) => {
@@ -164,10 +165,12 @@ const getCustomers = asyncHandler(async (req, res) => {
             { phone: searchRegex },
             { whatsapp: searchRegex },
             { city: searchRegex },
-            { address: searchRegex },
-            { cnic: searchRegex }
+            { address: searchRegex }
+            
         ];
-
+          if (req.user.role === 'admin') {
+            orConditions.push({ cnic: searchRegex });
+        }
         // 1. Customer Number search (handles "1001", "C-1001", "#C-1001", "#1001")
         const idMatch = cleanSearch.replace(/^[#cCsS\-\s]+/, '');
         const numId = Number(idMatch);
@@ -219,6 +222,7 @@ const getCustomers = asyncHandler(async (req, res) => {
         const totalPages = Math.ceil(totalRecords / pageSize) || 1;
 
         const customers = await Customer.find(query)
+            .select(customerFieldsFor(req.user))
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(pageSize);
@@ -235,13 +239,16 @@ const getCustomers = asyncHandler(async (req, res) => {
     }
 
     // Otherwise, return full array for non-paginated legacy callers (e.g. dropdowns in Order creation)
-    const customers = await Customer.find(query).sort({ createdAt: -1 });
+       const customers = await Customer.find(query)
+        .select(customerFieldsFor(req.user))
+        .sort({ createdAt: -1 });
     res.status(200).json(customers);
 });
 
 // 4. GETTING CUSTOMER BY ID
 const getCustomerById = asyncHandler(async (req, res) => {
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findById(req.params.id)
+        .select(customerFieldsFor(req.user));
     if (!customer) {
         res.status(404);
         throw new Error('Customer not found');
