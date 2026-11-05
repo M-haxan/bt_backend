@@ -7,6 +7,7 @@ const Supplier = require('../models/Supplier');
 const catchAsync = require('../middleware/asyncHandler');
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
 const { validatePassword } = require('./authController');
+const { revokeSessions } = require('../utils/authTokens');
 
 // 1. CREATE WORKER
 const createWorker = catchAsync(async (req, res) => {
@@ -163,11 +164,12 @@ const updateWorker = catchAsync(async (req, res) => {
     }
 
     const { name, phone, password, perSuitWage, advanceAmount, address, specialization, isActive, canCreateOrder, canDeliverOrder } = req.body;
-    const wasActive = worker.isActive;
+   const wasActive = worker.isActive;
+    let shouldRevokeSessions = false;
     // If the worker was just deactivated, invalidate any existing tokens too,
     // so they can't come back to life if the account is re-activated later.
     if (wasActive && worker.isActive === false) {
-        worker.tokenVersion = (worker.tokenVersion || 0) + 1;
+          shouldRevokeSessions = true;
     }
     worker.name = name || worker.name;
     if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
@@ -201,7 +203,7 @@ const updateWorker = catchAsync(async (req, res) => {
             throw new Error(passwordError);
         }
         worker.password = password; // pre-save hook will hash it
-        worker.tokenVersion = (worker.tokenVersion || 0) + 1; // old tokens stop working
+        shouldRevokeSessions = true;
     }
 
     if (req.file) {
@@ -214,6 +216,9 @@ const updateWorker = catchAsync(async (req, res) => {
     }
 
     const updatedWorker = await worker.save();
+    if (shouldRevokeSessions) {
+          await revokeSessions(worker._id); // log this worker out everywhere, immediately
+    }
     res.status(200).json(updatedWorker);
 });
 
@@ -230,6 +235,7 @@ const deleteWorker = catchAsync(async (req, res) => {
     }
 
     await worker.deleteOne();
+    await revokeSessions(worker._id);
     res.status(200).json({ message: 'Worker deleted successfully' });
 });
 

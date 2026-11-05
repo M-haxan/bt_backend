@@ -8,7 +8,8 @@ const {
     getAdminProfile,
     updateAdminProfile,
     forgotPassword,
-    resetPassword
+    resetPassword,
+    refreshAccessToken
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -31,7 +32,9 @@ router.post('/reset-password/:token', resetPassword);
 // Route: POST /api/auth/worker-login
 // Kaam: Worker login karna aur Token (JWT) lena
 router.post('/worker-login', loginWorker);
-
+// Route: POST /api/auth/refresh
+// Gets a new access token using the refresh cookie (no login needed)
+router.post('/refresh', refreshAccessToken);
 // Route: POST /api/auth/logout
 // Kaam: Admin logout karna aur Token (cookie) clear karna
 router.post('/logout', logoutAdmin);

@@ -1,63 +1,62 @@
 const jwt = require('jsonwebtoken');
 const catchAsync = require('./asyncHandler');
 const User = require('../models/User');
+const Session = require('../models/Session');
 
 const protect = catchAsync(async (req, res, next) => {
+    // Access token comes ONLY from the Authorization header now
     let token;
-
-    // Check if jwt exists in cookies or Bearer token in headers
-    if (req.cookies && req.cookies.jwt) {
-        token = req.cookies.jwt;
-    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         token = req.headers.authorization.split(' ')[1];
     }
 
-    if (token) {
-        try {
-            // Verify token with JWT secret
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-            // Fetch user by decoded ID
-            let user = await User.findById(decoded.id).select('-password');
-
-            // If not admin, check worker
-            if (!user) {
-                const Worker = require('../models/Worker');
-                user = await Worker.findById(decoded.id).select('-password');
-            }
-
-            if (!user) {
-                res.status(401);
-                throw new Error('User not found, authentication failed!');
-            }
-            // Check 1: a deactivated worker is rejected immediately
-            if (user.isActive === false) {
-                res.status(401);
-                throw new Error('Account is deactivated. Please contact admin.');
-            }
-
-            // Check 2: token was issued before the last password change / forced logout
-            if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
-                res.status(401);
-                throw new Error('Session expired. Please log in again.');
-            }
-            req.user = user;
-            next();
-        } catch (error) {
-            res.status(401);
-            throw new Error('Not authorized, token verification failed!');
-        }
-    }
-
-    // If no token provided
     if (!token) {
         res.status(401);
         throw new Error('Not authorized, no token provided!');
     }
-    // Allows the request only if the logged-in user is an admin.
-// Must be used AFTER `protect`, because it relies on req.user.
 
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+        // The session behind this token must still exist (logout deletes it)
+        const sessionActive = decoded.sid && await Session.exists({
+            _id: decoded.sid,
+            expiresAt: { $gt: new Date() }
+        });
+        if (!sessionActive) {
+            res.status(401);
+            throw new Error('Session ended. Please log in again.');
+        }
+
+        let user = await User.findById(decoded.id).select('-password');
+        if (!user) {
+            const Worker = require('../models/Worker');
+            user = await Worker.findById(decoded.id).select('-password');
+        }
+        if (!user) {
+            res.status(401);
+            throw new Error('User not found, authentication failed!');
+        }
+
+        // Deactivated workers are rejected immediately
+        if (user.isActive === false) {
+            res.status(401);
+            throw new Error('Account is deactivated. Please contact admin.');
+        }
+
+        // Extra safety net from the previous step
+        if ((decoded.tv || 0) !== (user.tokenVersion || 0)) {
+            res.status(401);
+            throw new Error('Session expired. Please log in again.');
+        }
+
+        req.user = user;
+        req.sessionId = decoded.sid;
+        next();
+    } catch (error) {
+        res.status(401);
+        throw new Error('Not authorized, token verification failed!');
+    }
 });
 const adminOnly = (req, res, next) => {
     if (req.user && req.user.role === 'admin') {

@@ -4,6 +4,19 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const sendEmail = require('../utils/sendEmail');
 const catchAsync = require('../middleware/asyncHandler');
+const Session = require('../models/Session');
+const {
+    REFRESH_COOKIE,
+    REFRESH_TOKEN_MS,
+    ROTATION_GRACE_MS,
+    hashToken,
+    generateRefreshToken,
+    setRefreshCookie,
+    clearAuthCookies,
+    signAccessToken,
+    startSession,
+    revokeSessions
+} = require('../utils/authTokens');
 
 // Password Complexity Validation Helper
 // Minimum 8 characters, at least 1 special character
@@ -21,18 +34,18 @@ const validatePassword = (password) => {
     return null;
 };
 
-const generateToken = (res, id, tokenVersion = 0) => {
-    const token = jwt.sign({ id, tv: tokenVersion }, process.env.JWT_SECRET, { expiresIn: '15m' });
+// const generateToken = (res, id, tokenVersion = 0) => {
+//     const token = jwt.sign({ id, tv: tokenVersion }, process.env.JWT_SECRET, { expiresIn: '15m' });
 
-    // Set JWT as HTTP-Only Cookie
-    res.cookie('jwt', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV !== 'development', // Use secure cookies in production
-        sameSite: 'none',
-        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
-    });
-    return token;
-};
+//     // Set JWT as HTTP-Only Cookie
+//     res.cookie('jwt', token, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV !== 'development', // Use secure cookies in production
+//         sameSite: 'none',
+//         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+//     });
+//     return token;
+// };
 
 // 1. REGISTER ADMIN (Accessible via hidden registration route)
 const registerAdmin = catchAsync(async (req, res) => {
@@ -71,7 +84,7 @@ const registerAdmin = catchAsync(async (req, res) => {
     });
 
     if (user) {
-        const token = generateToken(res, user._id, user.tokenVersion);
+    const token = await startSession(req, res, user, 'User');
 
         res.status(201).json({
             _id: user._id,
@@ -95,7 +108,7 @@ const loginAdmin = catchAsync(async (req, res) => {
 
     // Agar user mil jaye aur password match kar jaye
     if (user && (await user.matchPassword(password))) {
-        const token = generateToken(res, user._id, user.tokenVersion);
+    const token = await startSession(req, res, user, 'User');
 
         res.json({
             _id: user._id,
@@ -110,16 +123,97 @@ const loginAdmin = catchAsync(async (req, res) => {
     }
 });
 
-// 3. LOGOUT ADMIN
+// 3. LOGOUT (works even if the access token has already expired)
 const logoutAdmin = catchAsync(async (req, res) => {
-    res.cookie('jwt', '', {
-        httpOnly: true,
-        expires: new Date(0)
-    });
+    // Delete the session identified by the refresh cookie
+    const incoming = req.cookies && req.cookies[REFRESH_COOKIE];
+    if (incoming) {
+        const hashed = hashToken(incoming);
+        await Session.deleteOne({
+            $or: [{ refreshTokenHash: hashed }, { previousRefreshTokenHash: hashed }]
+        });
+    }
 
+    // Fallback if the browser blocked the cookie: use the session id inside the access token.
+    // (ignoreExpiration: the signature is still checked, so it can't be forged)
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+            const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET, { ignoreExpiration: true });
+            if (decoded.sid) {
+                await Session.deleteOne({ _id: decoded.sid });
+            }
+        } catch (error) {
+            // Invalid token: nothing to revoke
+        }
+    }
+
+    clearAuthCookies(res);
     res.status(200).json({ message: 'Logged out successfully' });
 });
+// 3b. REFRESH ACCESS TOKEN (uses the refresh cookie, rotates it)
+const refreshAccessToken = catchAsync(async (req, res) => {
+    const incoming = req.cookies && req.cookies[REFRESH_COOKIE];
+    if (!incoming) {
+        res.status(401);
+        throw new Error('No refresh token. Please log in again.');
+    }
 
+    const incomingHash = hashToken(incoming);
+    const session = await Session.findOne({
+        $or: [{ refreshTokenHash: incomingHash }, { previousRefreshTokenHash: incomingHash }]
+    });
+
+    if (!session || session.expiresAt <= new Date()) {
+        res.status(401);
+        throw new Error('Session expired. Please log in again.');
+    }
+
+    const isCurrentToken = session.refreshTokenHash === incomingHash;
+
+    // An OLD (already replaced) token is being used again.
+    // If that happens right after a rotation, it's just two tabs racing: allow it.
+    // Otherwise it may be a stolen copy: destroy the session.
+    if (!isCurrentToken) {
+        const rotatedRecently =
+            session.rotatedAt && (Date.now() - session.rotatedAt.getTime()) < ROTATION_GRACE_MS;
+        if (!rotatedRecently) {
+            await Session.deleteOne({ _id: session._id });
+            clearAuthCookies(res);
+            res.status(401);
+            throw new Error('Session invalid. Please log in again.');
+        }
+    }
+
+    const Model = session.userModel === 'Worker' ? Worker : User;
+    const user = await Model.findById(session.user).select('-password');
+    if (!user || user.isActive === false) {
+        await Session.deleteOne({ _id: session._id });
+        clearAuthCookies(res);
+        res.status(401);
+        throw new Error('Account not available. Please contact admin.');
+    }
+
+    // Rotate: issue a new refresh token. The condition makes this atomic,
+    // so if two requests race, only one of them rotates.
+    if (isCurrentToken) {
+        const newRefreshToken = generateRefreshToken();
+        const rotated = await Session.findOneAndUpdate(
+            { _id: session._id, refreshTokenHash: incomingHash },
+            {
+                previousRefreshTokenHash: incomingHash,
+                refreshTokenHash: hashToken(newRefreshToken),
+                rotatedAt: new Date(),
+                expiresAt: new Date(Date.now() + REFRESH_TOKEN_MS) // sliding 30 days
+            }
+        );
+        if (rotated) {
+            setRefreshCookie(res, newRefreshToken);
+        }
+    }
+
+    res.status(200).json({ token: signAccessToken(user, session._id) });
+});
 // 4. LOGIN WORKER
 const loginWorker = catchAsync(async (req, res) => {
     const { phone, password } = req.body;
@@ -152,7 +246,7 @@ const loginWorker = catchAsync(async (req, res) => {
             throw new Error('Worker account is inactive. Please contact admin.');
         }
 
-        const token = generateToken(res, worker._id, worker.tokenVersion);
+        const token = await startSession(req, res, worker, 'Worker');
 
         res.json({
             _id: worker._id,
@@ -220,10 +314,11 @@ const updateAdminProfile = catchAsync(async (req, res) => {
         }
 
         user.password = newPassword;
-        user.tokenVersion = (user.tokenVersion || 0) + 1; // logs out all other sessions
+        
     }
 
     const updatedUser = await user.save();
+    await revokeSessions(updatedUser._id, req.sessionId);
 
     res.status(200).json({
         _id: updatedUser._id,
@@ -338,10 +433,10 @@ const resetPassword = catchAsync(async (req, res) => {
     }
 
     user.password = password;
-    user.tokenVersion = (user.tokenVersion || 0) + 1; // old tokens stop working
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
+    await revokeSessions(user._id); // log out all devices
 
     res.status(200).json({
         message: 'Password has been reset successfully! You can now login with your new password.'
@@ -357,5 +452,6 @@ module.exports = {
     updateAdminProfile,
     forgotPassword,
     resetPassword,
-    validatePassword
+    validatePassword,
+    refreshAccessToken
 };
