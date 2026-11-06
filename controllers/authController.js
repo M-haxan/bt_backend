@@ -102,7 +102,10 @@ const registerAdmin = catchAsync(async (req, res) => {
 // 2. LOGIN ADMIN
 const loginAdmin = catchAsync(async (req, res) => {
     const { email, password } = req.body;
-
+    if (typeof email !== 'string' || typeof password !== 'string') {
+        res.status(400);
+        throw new Error('Invalid email or password format');
+    }
     // Email se user dhoondo
     const user = await User.findOne({ email }).select('+password');
 
@@ -217,6 +220,10 @@ const refreshAccessToken = catchAsync(async (req, res) => {
 // 4. LOGIN WORKER
 const loginWorker = catchAsync(async (req, res) => {
     const { phone, password } = req.body;
+    if ((typeof phone !== 'string' && typeof phone !== 'number') || typeof password !== 'string') {
+        res.status(400);
+        throw new Error('Invalid phone or password format');
+    }
 
     if (!phone || !password) {
         res.status(400);
@@ -330,18 +337,32 @@ const updateAdminProfile = catchAsync(async (req, res) => {
 
 // 7. FORGOT PASSWORD (Send Reset Link to Email)
 const forgotPassword = catchAsync(async (req, res) => {
-    const { email } = req.body;
-    if (!email) {
+        const { email } = req.body;
+    if (typeof email !== 'string' || !email.trim()) {
         res.status(400);
         throw new Error('Please enter your registered email address');
     }
+
+    // The reset link is built from OUR configured frontend address.
+    // Never from request headers: an attacker controls those.
+    const isDev = process.env.NODE_ENV === 'development';
+    const frontendUrl = (process.env.FRONTEND_URL || (isDev ? 'http://localhost:5173' : '')).replace(/\/+$/, '');
+    if (!frontendUrl) {
+        res.status(500);
+        throw new Error('Server configuration error: FRONTEND_URL is not set');
+    }
+
+    // The SAME reply whether or not the email exists,
+    // so nobody can use this form to find out which emails are registered.
+    const genericReply = {
+        message: 'If this email is registered, a password reset link has been sent to it.'
+    };
 
     const cleanEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
-        res.status(404);
-        throw new Error('This email is not registered with any admin account. Please enter your registered email address.');
+        return res.status(200).json(genericReply);
     }
 
     // Generate crypto token
@@ -352,9 +373,7 @@ const forgotPassword = catchAsync(async (req, res) => {
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 Hour
     await user.save({ validateBeforeSave: false });
 
-    // Client Reset URL
-    const origin = req.get('origin') || process.env.FRONTEND_URL || 'http://localhost:5173';
-    const resetUrl = `${origin}/reset-password/${resetToken}`;
+    const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
 
     const htmlMessage = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; color: #1e293b;">
@@ -388,7 +407,7 @@ const forgotPassword = catchAsync(async (req, res) => {
       </div>
     `;
 
-    try {
+        try {
         await sendEmail({
             to: user.email,
             subject: 'Balouch Tailors - Password Reset Link',
@@ -397,15 +416,19 @@ const forgotPassword = catchAsync(async (req, res) => {
         });
 
         res.status(200).json({
-            message: 'Password reset link has been sent to your email address.',
-            resetUrl: process.env.NODE_ENV === 'development' ? resetUrl : undefined
+            ...genericReply,
+            resetUrl: isDev ? resetUrl : undefined
         });
     } catch (err) {
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
         await user.save({ validateBeforeSave: false });
-        res.status(500);
-        throw new Error(`Email could not be sent: ${err.message}`);
+
+        // The real reason goes to the server log only.
+        console.error('Password reset email failed:', err.message);
+
+        // Same reply on purpose: an error here would reveal that this email exists.
+        res.status(200).json(genericReply);
     }
 });
 

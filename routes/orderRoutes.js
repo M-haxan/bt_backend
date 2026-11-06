@@ -10,6 +10,7 @@ const {
     trackSuitPublic,
     deliverOrder
 } = require('../controllers/orderController');
+const { trackLimiter } = require('../middleware/rateLimiters');
 
 const { upload } = require('../config/cloudinary');
 const { protect, adminOnly, requirePermission } = require('../middleware/authMiddleware');
@@ -17,8 +18,8 @@ const { protect, adminOnly, requirePermission } = require('../middleware/authMid
 const router = express.Router();
 
 // Public tracking (unchanged)
-router.get('/track/:orderNumber', trackOrderPublic);
-router.get('/track/suit/:suitId', trackSuitPublic);
+router.get('/track/:orderNumber', trackLimiter, trackOrderPublic);
+router.get('/track/suit/:suitId', protect, trackSuitPublic);  
 
 // Deliver: admin, or worker with delivery permission
 router.put('/:id/deliver', protect, requirePermission('canDeliverOrder'), deliverOrder);

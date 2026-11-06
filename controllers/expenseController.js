@@ -2,6 +2,7 @@ const Supplier = require('../models/Supplier');
 const SupplierLedger = require('../models/SupplierLedger');
 const Expense = require('../models/Expense');
 const catchAsync = require('../middleware/asyncHandler');
+const escapeRegex = require('../utils/escapeRegex');
 
 // 1. Create Supplier
 const createSupplier = catchAsync(async (req, res) => {
@@ -32,6 +33,7 @@ const createSupplier = catchAsync(async (req, res) => {
 // 2. Get All Suppliers (Supports DB Pagination & Search)
 const getSuppliers = catchAsync(async (req, res) => {
     const { page, limit, search } = req.query;
+      const regex = new RegExp(escapeRegex(search.trim()), 'i');
 
     let query = {};
     if (search && search.trim()) {
@@ -350,6 +352,7 @@ const createDirectExpense = catchAsync(async (req, res) => {
 // 8. Get All Shop Expenses (Supports DB Pagination & Search)
 const getExpenses = catchAsync(async (req, res) => {
     const { category, startDate, endDate, page, limit, search } = req.query;
+    const regex = new RegExp(escapeRegex(search.trim()), 'i');
 
     let query = {};
     if (category && category !== 'All') {

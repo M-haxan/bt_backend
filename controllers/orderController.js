@@ -3,7 +3,7 @@ const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
 const catchAsync = require('../middleware/asyncHandler');
 const { customerFieldsFor } = require('../utils/customerFields');
-
+const escapeRegex = require('../utils/escapeRegex');
 // Cloudinary helpers import kiye
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
 
@@ -453,68 +453,84 @@ const deleteOrder = catchAsync(async (req, res) => {
 // 6. PUBLIC TRACK ORDER
 const trackOrderPublic = catchAsync(async (req, res) => {
     const { orderNumber } = req.params;
-    let num = orderNumber;
-    if (orderNumber.startsWith('BT-')) {
-        num = orderNumber.replace('BT-', '');
+    const phoneDigits = String(req.query.phone || '').replace(/\D/g, '');
+
+    if (phoneDigits.length < 4) {
+        throw httpError(400, 'Please enter the last 4 digits of the phone number used for this order');
+    }
+
+    // ONE message for "no such order" and "wrong digits": never tell a stranger which one failed
+    const notFound = () => httpError(404, 'No order found. Please check the order number and the last 4 digits of your phone number.');
+
+    let num = String(orderNumber).trim();
+    if (num.toUpperCase().startsWith('BT-')) {
+        num = num.slice(3);
     }
     const parsedNum = Number(num);
-    if (isNaN(parsedNum)) {
-        res.status(400);
-        throw new Error('Invalid order number format');
+    if (!Number.isInteger(parsedNum) || parsedNum <= 0) {
+        throw notFound();
     }
 
     const order = await Order.findOne({ orderNumber: parsedNum })
         .populate('customer', 'name phone')
-        .populate('suits.wearer', 'name phone')
-        .populate('alterations.wearer', 'name phone');
+        .populate('suits.wearer', 'name');
 
-    if (!order) {
-        res.status(404);
-        throw new Error('Order not found');
+    const customerDigits = String(order?.customer?.phone || '').replace(/\D/g, '');
+    if (!order || !customerDigits || customerDigits.slice(-4) !== phoneDigits.slice(-4)) {
+        throw notFound();
     }
 
+    // Only customer-safe information: no wages, no worker names, no phone numbers, no measurements
     res.status(200).json({
         orderNumber: order.orderNumber,
         bookingDate: order.bookingDate,
         deliveryDate: order.deliveryDate,
         orderStatus: order.orderStatus,
         customerName: order.customer?.name || 'Customer',
-        suits: order.suits.map(s => ({
+        suits: order.suits.map((s) => ({
             _id: s._id,
             fabricDetails: s.fabricDetails,
             wearerName: s.wearer?.name || order.customer?.name || 'Wearer',
             stitchingStatus: s.stitchingStatus,
-            volumeNo: s.volumeNo,
-            staticTags: s.staticTags,
-            cutting: s.cutting,
-            stitching: s.stitching,
-            finishing: s.finishing
-        })),
-        alterations: order.alterations.map(a => ({
-            alterationDetails: a.alterationDetails,
-            wearerName: a.wearer?.name || order.customer?.name || 'Wearer',
-            status: a.status
+            volumeNo: s.volumeNo
         }))
     });
 });
 
-// 7. PUBLIC TRACK SUIT
+// Suit specification sheet (opened from the QR code on the job card).
+// NOT public any more: only the admin, or a worker who is assigned to this suit.
 const trackSuitPublic = catchAsync(async (req, res) => {
     const { suitId } = req.params;
+
+    if (!mongoose.isValidObjectId(suitId)) {
+        throw httpError(404, 'Suit not found or order deleted');
+    }
 
     const order = await Order.findOne({ 'suits._id': suitId })
         .populate('customer')
         .populate('suits.wearer');
 
     if (!order) {
-        res.status(404);
-        throw new Error('Suit not found or order deleted');
+        throw httpError(404, 'Suit not found or order deleted');
     }
 
     const suit = order.suits.id(suitId);
     if (!suit) {
-        res.status(404);
-        throw new Error('Suit details not found');
+        throw httpError(404, 'Suit details not found');
+    }
+
+    if (req.user.role !== 'admin') {
+        const myId = String(req.user._id);
+        const isAssigned = [
+            suit.assignedWorker,
+            suit.cutting && suit.cutting.assignedWorker,
+            suit.stitching && suit.stitching.assignedWorker,
+            suit.finishing && suit.finishing.assignedWorker
+        ].some((workerId) => workerId && String(workerId) === myId);
+
+        if (!isAssigned) {
+            throw httpError(403, 'This suit is not assigned to you');
+        }
     }
 
     const wearer = suit.wearer || order.customer;
@@ -522,6 +538,13 @@ const trackSuitPublic = catchAsync(async (req, res) => {
     const measurementsData = hasMeasurements ? wearer.measurements[0].data : {};
     const measurementsCategory = hasMeasurements ? wearer.measurements[0].category : '';
     const measurementsPreferences = hasMeasurements ? wearer.measurements[0].preferences : [];
+
+    // Stage info: status only. No wages and no worker ids.
+    const stageInfo = (stage) => ({
+        status: stage?.status,
+        isSelf: stage?.isSelf,
+        reworkNotes: stage?.reworkNotes
+    });
 
     res.status(200).json({
         suitId: suit._id,
@@ -535,12 +558,12 @@ const trackSuitPublic = catchAsync(async (req, res) => {
         customDesign: suit.customDesign || '',
         designImage: suit.designImage,
         fabricImage: suit.fabricImage,
-        cutting: suit.cutting,
-        stitching: suit.stitching,
-        finishing: suit.finishing,
+        cutting: stageInfo(suit.cutting),
+        stitching: stageInfo(suit.stitching),
+        finishing: stageInfo(suit.finishing),
         wearer: {
-            name: wearer.name,
-            phone: wearer.phone,
+            name: wearer?.name,
+            // no phone number here: a job card does not need it
             measurements: {
                 category: measurementsCategory,
                 data: measurementsData,

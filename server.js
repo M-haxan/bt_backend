@@ -4,6 +4,9 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
 const { errorHandler } = require('./middleware/errorMiddleware');
+const helmet = require('helmet');
+const sanitizeInput = require('./middleware/sanitizeInput');
+const { apiLimiter } = require('./middleware/rateLimiters');
 
 // Load .env early
 dotenv.config();
@@ -11,6 +14,10 @@ dotenv.config();
 const cookieParser = require('cookie-parser');
 
 const app = express();
+
+// We run behind ONE proxy (Render / Heroku / Hugging Face). Without this every visitor looks like
+// the same IP (the proxy's), and rate limits would punish everyone together.
+app.set('trust proxy', 1);
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',')
@@ -23,10 +30,11 @@ const corsOptions = {
     optionsSuccessStatus: 200 // For legacy browser support
 };
 
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } })); // safe security headers
 app.use(cors(corsOptions));
-// Middlewares
-
-app.use(express.json());
+app.use('/api', apiLimiter);                 // global rate limit
+app.use(express.json({ limit: '1mb' }));     // was unlimited-ish before
+app.use(sanitizeInput);                      // strips $operators from request bodies
 app.use(cookieParser());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 

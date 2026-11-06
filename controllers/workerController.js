@@ -8,6 +8,7 @@ const catchAsync = require('../middleware/asyncHandler');
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
 const { validatePassword } = require('./authController');
 const { revokeSessions } = require('../utils/authTokens');
+const escapeRegex = require('../utils/escapeRegex');
 
 // 1. CREATE WORKER
 const createWorker = catchAsync(async (req, res) => {
@@ -94,6 +95,7 @@ const createWorker = catchAsync(async (req, res) => {
 // 2. GET ALL WORKERS (Supports DB Pagination & Search)
 const getWorkers = catchAsync(async (req, res) => {
     const { page, limit, search } = req.query;
+    const regex = new RegExp(escapeRegex(cleanSearch), 'i');
 
     let query = {};
     if (search && search.trim()) {
