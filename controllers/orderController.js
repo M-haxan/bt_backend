@@ -1,155 +1,181 @@
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const CustomerLedger = require('../models/CustomerLedger');
+const TailoringService = require('../models/TailoringService');
 const catchAsync = require('../middleware/asyncHandler');
-const { customerFieldsFor } = require('../utils/customerFields');
+const httpError = require('../utils/httpError');
 const escapeRegex = require('../utils/escapeRegex');
+const { customerFieldsFor } = require('../utils/customerFields');
+const {
+    WORKERS_CAN_SET_CUSTOM_PRICES,
+    MAX_SUITS_PER_ORDER,
+    round2,
+    toMoney,
+    toPercent,
+    toText,
+    parseJsonField,
+    buildCatalogue,
+    cleanSuit,
+    cleanAlterations,
+    calculateSubtotals,
+    resolveNewAdjustment,
+    applyAdjustment,
+    hasProductionStarted
+} = require('../utils/orderPricing');
+
 // Cloudinary helpers import kiye
 const { getImageMetadata, deleteUploadedImage } = require('../config/cloudinary');
 
+// WHO is doing this action. Always taken from the login token, never from the request body.
+const actorFrom = (user) =>
+    user.role === 'admin'
+        ? { userType: 'admin', name: user.name || 'Admin' }
+        : { userType: 'worker', workerId: user._id, name: user.name || 'Worker' };
+
+const parseDate = (value, label) => {
+    if (!value) return undefined;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        throw httpError(400, `${label} is not a valid date`);
+    }
+    return date;
+};
+
+// Matches uploaded fabric photos to suits.
+// The frontend sends "fabricImageSuitIndexes" (e.g. [1, 3]) = which suits the photos belong to.
+const mapUploadedImages = (req, suitCount, positionalFallback) => {
+    const map = new Map();
+    const files = req.files || [];
+    if (files.length === 0) return map;
+
+    const indexes = parseJsonField(req.body.fabricImageSuitIndexes, null);
+    const hasIndexes = Array.isArray(indexes) && indexes.length === files.length;
+
+    files.forEach((file, i) => {
+        const suitIndex = hasIndexes ? Number(indexes[i]) : (positionalFallback ? i : -1);
+        if (Number.isInteger(suitIndex) && suitIndex >= 0 && suitIndex < suitCount) {
+            const { imageUrl, imagePublicId } = getImageMetadata(file);
+            map.set(suitIndex, { url: imageUrl, publicId: imagePublicId });
+        }
+    });
+    return map;
+};
+
 // 1. CREATE - Naya Order Create Karna
 const createOrder = catchAsync(async (req, res) => {
-    const {
-        customer, 
-        suits: rawSuits, 
-        alterations: rawAlterations, 
-        orderItems: rawOrderItems,
-        subtotal,
-        discountPercent,
-        discountAmount,
-        totalAmount, 
-        advancePaid, 
-        balanceAmount, 
-        deliveryDate,
-        bookingDate,
-        previousKhataAdjusted,
-        createdBy
-    } = req.body;
+    const isAdmin = req.user.role === 'admin';
+    const canCustomize = isAdmin || WORKERS_CAN_SET_CUSTOM_PRICES;
 
-    let suits = rawSuits;
-    let alterations = rawAlterations;
-    let orderItems = rawOrderItems;
+    const { customer } = req.body;
+    const rawSuits = parseJsonField(req.body.suits);
+    const rawAlterations = parseJsonField(req.body.alterations);
+    const requestedAdjustment = parseJsonField(req.body.previousKhataAdjusted, {}) || {};
 
-    let parsedCreatedBy = { userType: 'admin', name: 'Admin' };
-    if (typeof createdBy === 'string') {
-        try {
-            parsedCreatedBy = JSON.parse(createdBy);
-        } catch (e) {
-            parsedCreatedBy = { userType: 'admin', name: createdBy };
-        }
-    } else if (createdBy && typeof createdBy === 'object') {
-        parsedCreatedBy = createdBy;
+    if (!mongoose.isValidObjectId(customer)) {
+        throw httpError(400, 'A valid customer is required');
+    }
+    if (!Array.isArray(rawSuits) || !Array.isArray(rawAlterations)) {
+        throw httpError(400, 'Invalid suits or alterations data');
+    }
+    if (rawSuits.length === 0 && rawAlterations.length === 0) {
+        throw httpError(400, 'At least one suit or alteration is required');
+    }
+    if (rawSuits.length > MAX_SUITS_PER_ORDER) {
+        throw httpError(400, `An order can have at most ${MAX_SUITS_PER_ORDER} suits`);
     }
 
-    // IMPORTANT LOGIC: Jab frontend se FormData (images) aata hai, toh arrays JSON string ban jati hain.
-    // Isliye humein inko pehle wapis normal array mein parse (convert) karna hoga.
-    if (typeof suits === 'string') suits = JSON.parse(suits);
-    if (typeof alterations === 'string') alterations = JSON.parse(alterations);
-    if (typeof orderItems === 'string') {
-        try {
-            orderItems = JSON.parse(orderItems);
-        } catch (e) {
-            orderItems = [];
-        }
-    }
-    if (typeof previousKhataAdjusted === 'string') {
-        try {
-            previousKhataAdjusted = JSON.parse(previousKhataAdjusted);
-        } catch (e) {
-            console.error('Error parsing previousKhataAdjusted:', e);
-        }
+    const customerDoc = await Customer.findById(customer);
+    if (!customerDoc) {
+        throw httpError(404, 'Customer not found');
     }
 
-    // Validation Update: "Ya suits hon, YA alterations hon" (Dono mein se ek lazmi hai)
-    if (!customer || (!suits?.length && !alterations?.length) || totalAmount === undefined) {
-        res.status(400);
-        throw new Error('Customer, at least one suit OR alteration, and total amount are required');
+    const discountPercent = toPercent(req.body.discountPercent);
+    if (discountPercent > 0 && !canCustomize) {
+        throw httpError(400, 'Only admin can give a discount');
     }
 
-    // 🌟 Fabric Images Mapping Logic 🌟
-    // Agar suits hain aur request mein images (files) bhi aayi hain
-    if (suits && suits.length > 0 && req.files && req.files.length > 0) {
-        // Hum loop chala rahe hain aur har image ko uske number wale suit mein daal rahe hain
-        suits = suits.map((suit, index) => {
-            if (req.files[index]) {
-                const { imageUrl, imagePublicId } = getImageMetadata(req.files[index]);
-                return { ...suit, fabricImage: { url: imageUrl, publicId: imagePublicId } };
-            }
-            return suit;
-        });
-    }
+    // The SERVER's price list decides prices, not the browser
+    const catalogue = buildCatalogue(await TailoringService.find({ isActive: { $ne: false } }).lean());
+    const imageBySuit = mapUploadedImages(req, rawSuits.length, true);
 
     const lastOrder = await Order.findOne().sort({ orderNumber: -1 });
-    let nextOrderNumber = 1; 
-    if (lastOrder && lastOrder.orderNumber) {
-        nextOrderNumber = lastOrder.orderNumber + 1; 
+    const nextOrderNumber = lastOrder && lastOrder.orderNumber ? lastOrder.orderNumber + 1 : 1;
+
+    // Only whitelisted fields are copied from the request (see cleanSuit)
+    const suits = rawSuits.map((raw, index) => ({
+        ...cleanSuit(raw, { customerId: customer, catalogue, canCustomize }),
+        suitNumber: `BT-${nextOrderNumber}-${index + 1}`,
+        ...(imageBySuit.has(index) ? { fabricImage: imageBySuit.get(index) } : {})
+    }));
+    const alterations = cleanAlterations(rawAlterations, customer);
+
+    // All money fields are calculated here
+    const { subtotal, discountAmount, discountedSubtotal } = calculateSubtotals({ suits, alterations, discountPercent });
+    if (subtotal <= 0) {
+        throw httpError(400, 'Order total cannot be zero');
     }
 
-    // 🌟 Per-suit unique identifier assignment (e.g. BT-1001-1, BT-1001-2) 🌟
-    const preparedSuits = (suits || []).map((suit, index) => {
-        return {
-            ...suit,
-            suitNumber: `BT-${nextOrderNumber}-${index + 1}`
-        };
-    });
+    const previousKhataAdjusted = resolveNewAdjustment(requestedAdjustment.type, customerDoc.khataBalance, discountedSubtotal);
+    const totalAmount = applyAdjustment(discountedSubtotal, previousKhataAdjusted);
+
+    const advancePaid = toMoney(req.body.advancePaid, 'Advance');
+    if (advancePaid > totalAmount) {
+        throw httpError(400, 'Advance cannot be more than the total amount');
+    }
 
     const newOrder = new Order({
         orderNumber: nextOrderNumber,
         customer,
-        suits: preparedSuits,
-        alterations: alterations || [],
-        orderItems: orderItems || [],
-        subtotal: Number(subtotal) || 0,
-        discountPercent: Number(discountPercent) || 0,
-        discountAmount: Number(discountAmount) || 0,
+        suits,
+        alterations,
+        subtotal,
+        discountPercent,
+        discountAmount,
         totalAmount,
-        advancePaid: advancePaid || 0,
-        balanceAmount: balanceAmount || 0,
-        deliveryDate,
-        bookingDate: bookingDate ? new Date(bookingDate) : Date.now(),
-        previousKhataAdjusted: previousKhataAdjusted || { type: 'none', amount: 0 },
-        createdBy: parsedCreatedBy
+        advancePaid,
+        balanceAmount: round2(totalAmount - advancePaid),
+        deliveryDate: parseDate(req.body.deliveryDate, 'Delivery date'),
+        bookingDate: parseDate(req.body.bookingDate, 'Booking date') || Date.now(),
+        previousKhataAdjusted,
+        createdBy: actorFrom(req.user) // from the login token, not from the request body
     });
-    
+
     const savedOrder = await newOrder.save();
 
-
     // 🌟 If Previous Khata was adjusted on this order, record in Customer Ledger 🌟
-    if (previousKhataAdjusted && previousKhataAdjusted.amount > 0) {
-        const customerDoc = await Customer.findById(customer);
-        if (customerDoc) {
-            const adjAmount = Number(previousKhataAdjusted.amount);
-            let currentBal = Number(customerDoc.khataBalance) || 0;
-            let newBal = currentBal;
+    if (previousKhataAdjusted.amount > 0) {
+        const adjAmount = previousKhataAdjusted.amount;
+        const currentBal = Number(customerDoc.khataBalance) || 0;
+        let newBal = currentBal;
 
-            if (previousKhataAdjusted.type === 'deducted_advance') {
-                // Customer's stored advance (-ve) was consumed in this order
-                newBal = currentBal + adjAmount;
-                await CustomerLedger.create({
-                    customer,
-                    type: 'adjustment',
-                    amount: adjAmount,
-                    runningBalance: newBal,
-                    description: `Advance balance adjusted into new Order #BT-${nextOrderNumber}`,
-                    orderId: savedOrder._id,
-                    orderNumber: nextOrderNumber
-                });
-            } else if (previousKhataAdjusted.type === 'added_due') {
-                // Previous udhar (+ve) added into invoice
-                await CustomerLedger.create({
-                    customer,
-                    type: 'adjustment',
-                    amount: adjAmount,
-                    runningBalance: currentBal,
-                    description: `Previous due included in Order #BT-${nextOrderNumber} invoice`,
-                    orderId: savedOrder._id,
-                    orderNumber: nextOrderNumber
-                });
-            }
-
-            customerDoc.khataBalance = newBal;
-            await customerDoc.save();
+        if (previousKhataAdjusted.type === 'deducted_advance') {
+            // Customer's stored advance (-ve) was consumed in this order
+            newBal = currentBal + adjAmount;
+            await CustomerLedger.create({
+                customer,
+                type: 'adjustment',
+                amount: adjAmount,
+                runningBalance: newBal,
+                description: `Advance balance adjusted into new Order #BT-${nextOrderNumber}`,
+                orderId: savedOrder._id,
+                orderNumber: nextOrderNumber
+            });
+        } else if (previousKhataAdjusted.type === 'added_due') {
+            // Previous udhar (+ve) added into invoice
+            await CustomerLedger.create({
+                customer,
+                type: 'adjustment',
+                amount: adjAmount,
+                runningBalance: currentBal,
+                description: `Previous due included in Order #BT-${nextOrderNumber} invoice`,
+                orderId: savedOrder._id,
+                orderNumber: nextOrderNumber
+            });
         }
+
+        customerDoc.khataBalance = newBal;
+        await customerDoc.save();
     }
 
     res.status(201).json(savedOrder);
@@ -354,77 +380,148 @@ const getOrderById = catchAsync(async (req, res) => {
 });
 // 4. UPDATE - Order Status ya Details Change Karna
 const updateOrder = catchAsync(async (req, res) => {
-    let suits = req.body.suits;
-    if (typeof suits === 'string') {
-        try { suits = JSON.parse(suits); } catch (e) { suits = []; }
+    const isAdmin = req.user.role === 'admin';
+    const canCustomize = isAdmin || WORKERS_CAN_SET_CUSTOM_PRICES;
+
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+        throw httpError(404, 'Order not found');
     }
 
-    let alterations = req.body.alterations;
-    if (typeof alterations === 'string') {
-        try { alterations = JSON.parse(alterations); } catch (e) { alterations = []; }
+    // Delivered / cancelled orders are locked: editing them would silently change the books
+    if (['Delivered', 'Cancelled'].includes(order.orderStatus)) {
+        throw httpError(400, `${order.orderStatus} orders are locked and cannot be edited`);
+    }
+    if (req.body.customer && String(req.body.customer) !== String(order.customer)) {
+        throw httpError(400, 'The customer of an existing order cannot be changed');
     }
 
-    let orderItems = req.body.orderItems;
-    if (typeof orderItems === 'string') {
-        try { orderItems = JSON.parse(orderItems); } catch (e) { orderItems = []; }
-    }
+    const catalogue = buildCatalogue(await TailoringService.find({ isActive: { $ne: false } }).lean());
+    const replacedImageIds = [];
 
-    const { 
-        customer,
-        totalAmount, 
-        advancePaid, 
-        balanceAmount, 
-        subtotal,
-        discountPercent,
-        discountAmount,
-        deliveryDate, 
-        bookingDate,
-        orderStatus 
-    } = req.body;
+    // ---- Suits: MERGE into the existing ones (never replace the whole array) ----
+    if (req.body.suits !== undefined) {
+        const rawSuits = parseJsonField(req.body.suits);
+        if (!Array.isArray(rawSuits)) {
+            throw httpError(400, 'Invalid suits data');
+        }
+        if (rawSuits.length > MAX_SUITS_PER_ORDER) {
+            throw httpError(400, `An order can have at most ${MAX_SUITS_PER_ORDER} suits`);
+        }
 
-    const updateFields = {};
-    if (customer) updateFields.customer = customer;
-    if (suits) updateFields.suits = suits;
-    if (alterations) updateFields.alterations = alterations;
-    if (orderItems) updateFields.orderItems = orderItems;
-    if (totalAmount !== undefined) updateFields.totalAmount = Number(totalAmount) || 0;
-    if (advancePaid !== undefined) updateFields.advancePaid = Number(advancePaid) || 0;
-    if (balanceAmount !== undefined) updateFields.balanceAmount = Number(balanceAmount) || 0;
-    if (subtotal !== undefined) updateFields.subtotal = Number(subtotal) || 0;
-    if (discountPercent !== undefined) updateFields.discountPercent = Number(discountPercent) || 0;
-    if (discountAmount !== undefined) updateFields.discountAmount = Number(discountAmount) || 0;
-    if (deliveryDate) updateFields.deliveryDate = new Date(deliveryDate);
-    if (bookingDate) updateFields.bookingDate = new Date(bookingDate);
-    if (orderStatus) updateFields.orderStatus = orderStatus;
+        const idsInRequest = new Set(rawSuits.filter((r) => r && r._id).map((r) => String(r._id)));
 
-    // If new fabric photos were uploaded during edit
-    if (req.files && req.files.length > 0 && updateFields.suits) {
-        req.files.forEach((file) => {
-            const match = file.fieldname.match(/suitImage_(\d+)/);
-            if (match && match[1]) {
-                const suitIndex = parseInt(match[1], 10);
-                if (updateFields.suits[suitIndex]) {
-                    updateFields.suits[suitIndex].fabricImage = {
-                        url: file.path,
-                        publicId: file.filename
-                    };
+        // Suits that are not in the request get removed, but ONLY if no work has started on them
+        const toRemove = order.suits.filter((s) => !idsInRequest.has(String(s._id)));
+        toRemove.forEach((s) => {
+            if (hasProductionStarted(s)) {
+                throw httpError(400, `Suit ${s.suitNumber} is already in production and cannot be removed. Please refresh the page and try again.`);
+            }
+        });
+
+        // Next free suit number (never re-use the number of a removed suit)
+        let nextSuffix = order.suits.reduce((max, s) => {
+            const n = parseInt(String(s.suitNumber || '').split('-').pop(), 10) || 0;
+            return Math.max(max, n);
+        }, 0) + 1;
+
+        toRemove.forEach((s) => order.suits.pull(s._id));
+
+        const imageBySuit = mapUploadedImages(req, rawSuits.length, false);
+
+        rawSuits.forEach((raw, index) => {
+            const existing = raw && raw._id && mongoose.isValidObjectId(raw._id) ? order.suits.id(raw._id) : null;
+            const cleaned = cleanSuit(raw, { customerId: order.customer, catalogue, canCustomize, existing });
+            const newImage = imageBySuit.get(index);
+
+            if (existing) {
+                // set() touches ONLY the fields in `cleaned`.
+                // Cutting / stitching / finishing, wages, QC status and workers stay untouched.
+                existing.set(cleaned);
+                if (newImage) {
+                    if (existing.fabricImage && existing.fabricImage.publicId) {
+                        replacedImageIds.push(existing.fabricImage.publicId);
+                    }
+                    existing.fabricImage = newImage;
                 }
+            } else {
+                order.suits.push({
+                    ...cleaned,
+                    suitNumber: `BT-${order.orderNumber}-${nextSuffix++}`,
+                    ...(newImage ? { fabricImage: newImage } : {})
+                });
             }
         });
     }
 
-    const updatedOrder = await Order.findByIdAndUpdate(
-        req.params.id,
-        updateFields,
-        { new: true, runValidators: true }
-    ).populate('customer'); 
-    
-    if (!updatedOrder) {
-        res.status(404);
-        throw new Error('Order not found');
+    if (req.body.alterations !== undefined) {
+        order.alterations = cleanAlterations(parseJsonField(req.body.alterations), order.customer);
     }
-    
-    res.status(200).json(updatedOrder);
+
+    // ---- Money: always recalculated on the server ----
+    let discountPercent = Number(order.discountPercent) || 0;
+    if (canCustomize && req.body.discountPercent !== undefined) {
+        discountPercent = toPercent(req.body.discountPercent);
+    }
+
+    const { subtotal, discountAmount, discountedSubtotal } = calculateSubtotals({
+        suits: order.suits,
+        alterations: order.alterations,
+        discountPercent
+    });
+    if (subtotal <= 0) {
+        throw httpError(400, 'Order total cannot be zero');
+    }
+
+    // The khata adjustment chosen when the order was booked stays fixed
+    const stored = order.previousKhataAdjusted || {};
+    const adjustment = { type: stored.type || 'none', amount: Number(stored.amount) || 0 };
+    const totalAmount = applyAdjustment(discountedSubtotal, adjustment);
+
+    const advancePaid = req.body.advancePaid !== undefined
+        ? toMoney(req.body.advancePaid, 'Advance')
+        : (Number(order.advancePaid) || 0);
+    if (advancePaid > totalAmount) {
+        throw httpError(400, 'Advance cannot be more than the total amount');
+    }
+
+    order.subtotal = subtotal;
+    order.discountPercent = discountPercent;
+    order.discountAmount = discountAmount;
+    order.totalAmount = totalAmount;
+    order.advancePaid = advancePaid;
+    order.balanceAmount = round2(totalAmount - advancePaid);
+
+    const deliveryDate = parseDate(req.body.deliveryDate, 'Delivery date');
+    if (deliveryDate) order.deliveryDate = deliveryDate;
+    const bookingDate = parseDate(req.body.bookingDate, 'Booking date');
+    if (bookingDate) order.bookingDate = bookingDate;
+
+    // ---- Status: only admin, and never "Delivered" (that goes through the delivery screen) ----
+    const { orderStatus } = req.body;
+    if (orderStatus && orderStatus !== order.orderStatus) {
+        if (!isAdmin) {
+            throw httpError(403, 'Only admin can change the order status');
+        }
+        if (!['Pending', 'In Progress', 'Completed', 'Cancelled'].includes(orderStatus)) {
+            throw httpError(400, 'Invalid order status. "Delivered" can only be set from the delivery screen.');
+        }
+        order.orderStatus = orderStatus;
+    }
+
+    await order.save();
+
+    // Remove replaced photos from Cloudinary (best effort: a failure here must not break the save)
+    for (const publicId of replacedImageIds) {
+        try {
+            await deleteUploadedImage(publicId);
+        } catch (error) {
+            console.error('Old image cleanup failed:', error.message);
+        }
+    }
+
+    await order.populate({ path: 'customer', select: customerFieldsFor(req.user) });
+    res.status(200).json(order);
 });
 
 // 5. DELETE - Order Delete Karna (With Cloudinary Cleanup)
@@ -576,26 +673,25 @@ const trackSuitPublic = catchAsync(async (req, res) => {
 // 8. DELIVER ORDER & SETTLE PAYMENT / RECORD UDHAR OR OVERPAYMENT
 const deliverOrder = catchAsync(async (req, res) => {
     const { id } = req.params;
-    const { receivedAmount = 0, paymentMethod = 'Cash', deliveredBy } = req.body;
+    const { paymentMethod = 'Cash' } = req.body;
 
-    const order = await Order.findById(id).populate('customer');
+    const order = await Order.findById(id).populate('customer', 'name phone whatsapp address city');
     if (!order) {
-        res.status(404);
-        throw new Error('Order not found');
+        throw httpError(404, 'Order not found');
     }
 
-    let parsedDeliveredBy = { userType: 'admin', name: 'Admin' };
-    if (typeof deliveredBy === 'string') {
-        try {
-            parsedDeliveredBy = JSON.parse(deliveredBy);
-        } catch (e) {
-            parsedDeliveredBy = { userType: 'admin', name: deliveredBy };
-        }
-    } else if (deliveredBy && typeof deliveredBy === 'object') {
-        parsedDeliveredBy = deliveredBy;
+    // An order can be delivered only ONCE (a double click must not post the ledger twice)
+    if (order.orderStatus === 'Delivered') {
+        throw httpError(400, 'This order has already been delivered');
+    }
+    if (order.orderStatus === 'Cancelled') {
+        throw httpError(400, 'A cancelled order cannot be delivered');
     }
 
-    const numReceived = Number(receivedAmount) || 0;
+    // WHO delivered: from the login token, not from the request body
+    const parsedDeliveredBy = actorFrom(req.user);
+
+    const numReceived = toMoney(req.body.receivedAmount, 'Received amount');
     const previousBalance = Number(order.balanceAmount) || 0;
     const diff = previousBalance - numReceived; // Positive = Underpaid (Udhar), Negative = Overpaid (Credit)
 
@@ -604,8 +700,7 @@ const deliverOrder = catchAsync(async (req, res) => {
     order.receivedAtDelivery = {
         amount: numReceived,
         date: new Date(),
-        paymentMethod: paymentMethod || 'Cash',
-        receivedBy: parsedDeliveredBy.name || 'Admin'
+        paymentMethod: toText(paymentMethod, 30) || 'Cash'
     };
     order.deliveredBy = parsedDeliveredBy;
     order.balanceAmount = Math.max(0, previousBalance - numReceived);
