@@ -7,7 +7,7 @@ const {
     updateOrder,
     deleteOrder,
     trackOrderPublic,
-    trackSuitPublic,
+    updateOrderStatus,
     deliverOrder
 } = require('../controllers/orderController');
 const { trackLimiter } = require('../middleware/rateLimiters');
@@ -17,9 +17,11 @@ const { protect, adminOnly, requirePermission } = require('../middleware/authMid
 
 const router = express.Router();
 
-// Public tracking (unchanged)
+// Public customer tracking (order number + last 4 digits of phone)
 router.get('/track/:orderNumber', trackLimiter, trackOrderPublic);
-router.get('/track/suit/:suitId', protect, trackSuitPublic);  
+
+// Order status only (admin)
+router.put('/:id/status', protect, adminOnly, updateOrderStatus);
 
 // Deliver: admin, or worker with delivery permission
 router.put('/:id/deliver', protect, requirePermission('canDeliverOrder'), deliverOrder);

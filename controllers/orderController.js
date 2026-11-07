@@ -594,80 +594,57 @@ const trackOrderPublic = catchAsync(async (req, res) => {
     });
 });
 
-// Suit specification sheet (opened from the QR code on the job card).
-// NOT public any more: only the admin, or a worker who is assigned to this suit.
-const trackSuitPublic = catchAsync(async (req, res) => {
-    const { suitId } = req.params;
+// 4.1 UPDATE ORDER STATUS ONLY (admin). Does not touch prices, suits or payments.
+// "Delivered" is never set here: it goes through the delivery screen (payment settlement).
+const ORDER_STATUS_FLOW = {
+    'Pending': ['In Progress', 'Completed', 'Cancelled'],
+    'In Progress': ['Pending', 'Completed', 'Cancelled'],
+    'Completed': ['In Progress', 'Cancelled'],
+    'Delivered': [],
+    'Cancelled': []
+};
+// Set to false if you want to allow "Completed" even when some suits are not stitched yet
+const REQUIRE_ALL_SUITS_STITCHED_FOR_COMPLETED = true;
 
-    if (!mongoose.isValidObjectId(suitId)) {
-        throw httpError(404, 'Suit not found or order deleted');
+const updateOrderStatus = catchAsync(async (req, res) => {
+    const { orderStatus } = req.body;
+
+    if (!orderStatus || !Object.keys(ORDER_STATUS_FLOW).includes(orderStatus)) {
+        throw httpError(400, 'Invalid order status');
+    }
+    if (orderStatus === 'Delivered') {
+        throw httpError(400, '"Delivered" can only be set from the delivery screen.');
     }
 
-    const order = await Order.findOne({ 'suits._id': suitId })
-        .populate('customer')
-        .populate('suits.wearer');
-
+    const order = await Order.findById(req.params.id);
     if (!order) {
-        throw httpError(404, 'Suit not found or order deleted');
+        throw httpError(404, 'Order not found');
     }
 
-    const suit = order.suits.id(suitId);
-    if (!suit) {
-        throw httpError(404, 'Suit details not found');
+    if (order.orderStatus === orderStatus) {
+        return res.status(200).json(order);
     }
 
-    if (req.user.role !== 'admin') {
-        const myId = String(req.user._id);
-        const isAssigned = [
-            suit.assignedWorker,
-            suit.cutting && suit.cutting.assignedWorker,
-            suit.stitching && suit.stitching.assignedWorker,
-            suit.finishing && suit.finishing.assignedWorker
-        ].some((workerId) => workerId && String(workerId) === myId);
+    if (!ORDER_STATUS_FLOW[order.orderStatus].includes(orderStatus)) {
+        throw httpError(400, `${order.orderStatus} orders cannot be changed to "${orderStatus}".`);
+    }
 
-        if (!isAssigned) {
-            throw httpError(403, 'This suit is not assigned to you');
+    if (orderStatus === 'Completed' && REQUIRE_ALL_SUITS_STITCHED_FOR_COMPLETED) {
+        const pending = order.suits.filter((s) => s.stitchingStatus !== 'Stitched').length;
+        if (pending > 0) {
+            throw httpError(400, `${pending} suit(s) are not stitched yet. Stitch / approve all suits before marking the order Completed.`);
         }
     }
 
-    const wearer = suit.wearer || order.customer;
-    const hasMeasurements = wearer?.measurements && wearer.measurements.length > 0;
-    const measurementsData = hasMeasurements ? wearer.measurements[0].data : {};
-    const measurementsCategory = hasMeasurements ? wearer.measurements[0].category : '';
-    const measurementsPreferences = hasMeasurements ? wearer.measurements[0].preferences : [];
+    order.orderStatus = orderStatus;
+    await order.save();
 
-    // Stage info: status only. No wages and no worker ids.
-    const stageInfo = (stage) => ({
-        status: stage?.status,
-        isSelf: stage?.isSelf,
-        reworkNotes: stage?.reworkNotes
-    });
+    const updated = await Order.findById(order._id)
+        .populate('customer', customerFieldsFor(req.user))
+        .populate('suits.wearer', customerFieldsFor(req.user))
+        .populate('alterations.wearer', customerFieldsFor(req.user));
 
-    res.status(200).json({
-        suitId: suit._id,
-        orderNumber: order.orderNumber,
-        bookingDate: order.bookingDate,
-        deliveryDate: order.deliveryDate,
-        stitchingStatus: suit.stitchingStatus,
-        fabricDetails: suit.fabricDetails,
-        volumeNo: suit.volumeNo,
-        staticTags: suit.staticTags || [],
-        customDesign: suit.customDesign || '',
-        designImage: suit.designImage,
-        fabricImage: suit.fabricImage,
-        cutting: stageInfo(suit.cutting),
-        stitching: stageInfo(suit.stitching),
-        finishing: stageInfo(suit.finishing),
-        wearer: {
-            name: wearer?.name,
-            // no phone number here: a job card does not need it
-            measurements: {
-                category: measurementsCategory,
-                data: measurementsData,
-                preferences: measurementsPreferences
-            }
-        }
-    });
+    res.status(200).json(updated);
 });
 
 // 8. DELIVER ORDER & SETTLE PAYMENT / RECORD UDHAR OR OVERPAYMENT
@@ -769,6 +746,6 @@ module.exports = {
     updateOrder,
     deleteOrder,
     trackOrderPublic,
-    trackSuitPublic,
+    updateOrderStatus,
     deliverOrder
 };

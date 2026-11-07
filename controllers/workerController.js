@@ -95,12 +95,11 @@ const createWorker = catchAsync(async (req, res) => {
 // 2. GET ALL WORKERS (Supports DB Pagination & Search)
 const getWorkers = catchAsync(async (req, res) => {
     const { page, limit, search } = req.query;
-    const regex = new RegExp(escapeRegex(cleanSearch), 'i');
 
     let query = {};
     if (search && search.trim()) {
         const cleanSearch = search.trim();
-        const regex = new RegExp(cleanSearch, 'i');
+        const regex = new RegExp(escapeRegex(cleanSearch), 'i');
         const numSearch = Number(cleanSearch);
 
         query.$or = [
@@ -622,6 +621,7 @@ const markSuitAsStitched = catchAsync(async (req, res) => {
 });
 
 // 8. ADMIN ASSIGN STAGE (CUTTING, STITCHING, FINISHING OR OWNER/SELF)
+// 8. ADMIN ASSIGN STAGE (CUTTING, STITCHING, FINISHING OR OWNER/SELF)
 const adminAssignStage = catchAsync(async (req, res) => {
     const { orderId, suitId } = req.params;
     const { stage, isSelf, workerId, wage, status } = req.body;
@@ -632,6 +632,11 @@ const adminAssignStage = catchAsync(async (req, res) => {
         throw new Error('Order not found');
     }
 
+    if (['Delivered', 'Cancelled'].includes(order.orderStatus)) {
+        res.status(400);
+        throw new Error(`${order.orderStatus} orders are locked. Karigar assignment cannot be changed.`);
+    }
+
     const suit = order.suits.id(suitId);
     if (!suit) {
         res.status(404);
@@ -639,45 +644,94 @@ const adminAssignStage = catchAsync(async (req, res) => {
     }
 
     const targetStage = stage || 'stitching';
+    if (!['cutting', 'stitching', 'finishing'].includes(targetStage)) {
+        res.status(400);
+        throw new Error('Invalid stage');
+    }
 
     if (!suit[targetStage]) {
         suit[targetStage] = {};
     }
 
-    if (isSelf) {
+    const isStitching = targetStage === 'stitching';
+
+    // ---- Guards: stop wrong / repeated assignments ----
+    if (isStitching) {
+        if (suit.stitchingStatus === 'Stitched') {
+            res.status(400);
+            throw new Error('This suit is already stitched and approved. Assignment is locked.');
+        }
+        if (suit.stitchingStatus === 'Submitted for Inspection') {
+            res.status(400);
+            throw new Error('This suit is under QC inspection. Approve it or send it for rework before changing the karigar.');
+        }
+    }
+
+    const wantsSelf = Boolean(isSelf);
+    const wantsWorkerId = !wantsSelf && workerId ? String(workerId) : null;
+
+    if (isStitching) {
+        const currentWorkerId = suit.stitching.assignedWorker ? String(suit.stitching.assignedWorker) : null;
+        const currentIsSelf = Boolean(suit.stitching.isSelf);
+        const alreadyActive = suit.stitchingStatus !== 'Pending'; // Assigned or Rework Required
+
+        if (wantsSelf && currentIsSelf && alreadyActive) {
+            res.status(400);
+            throw new Error('This suit is already assigned to Owner / Self.');
+        }
+        if (wantsWorkerId && currentWorkerId === wantsWorkerId && !currentIsSelf && alreadyActive) {
+            res.status(400);
+            throw new Error('This suit is already assigned to this karigar.');
+        }
+        if (!wantsSelf && !wantsWorkerId && !currentIsSelf && !currentWorkerId) {
+            res.status(400);
+            throw new Error('This suit is already unassigned.');
+        }
+    }
+
+    // ---- Apply ----
+    if (wantsSelf) {
         suit[targetStage].isSelf = true;
         suit[targetStage].assignedWorker = null;
-        if (targetStage === 'stitching') {
+        suit[targetStage].wage = 0;
+        if (isStitching) {
             suit.assignedWorker = undefined;
+            suit.stitchingStatus = 'Assigned';
+            suit.stitching.status = 'Assigned';
         }
-    } else if (workerId) {
-        const worker = await Worker.findById(workerId);
+    } else if (wantsWorkerId) {
+        const worker = await Worker.findById(wantsWorkerId);
         if (!worker) {
             res.status(404);
             throw new Error('Worker not found');
         }
+        if (worker.isActive === false) {
+            res.status(400);
+            throw new Error('This worker is inactive and cannot be assigned work.');
+        }
         suit[targetStage].isSelf = false;
-        suit[targetStage].assignedWorker = workerId;
+        suit[targetStage].assignedWorker = wantsWorkerId;
         suit[targetStage].wage = wage !== undefined ? Number(wage) : worker.perSuitWage;
-        if (targetStage === 'stitching') {
-            suit.assignedWorker = workerId;
-            if (suit.stitchingStatus === 'Pending') {
-                suit.stitchingStatus = 'Assigned';
-            }
+        if (isStitching) {
+            suit.assignedWorker = wantsWorkerId;
+            suit.stitchingStatus = 'Assigned';
+            suit.stitching.status = 'Assigned';
         }
     } else {
-        // Unassigned
+        // Unassign
         suit[targetStage].isSelf = false;
         suit[targetStage].assignedWorker = null;
-        if (targetStage === 'stitching') {
+        suit[targetStage].wage = 0;
+        if (isStitching) {
             suit.assignedWorker = undefined;
             suit.stitchingStatus = 'Pending';
+            suit.stitching.status = 'Pending';
         }
     }
 
     if (status) {
         suit[targetStage].status = status;
-        if (targetStage === 'stitching') {
+        if (isStitching) {
             suit.stitchingStatus = status === 'Completed' ? 'Stitched' : status;
         }
     }
